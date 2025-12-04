@@ -2,6 +2,10 @@
 
 A simple EFI boot loader for ravynOS.
 
+#### Source Code
+
+In the folder `./MdeModulePkg/Application/Loader`
+
 #### Build Instructions
 
 From a POSIX shell, run `./buildloader.sh`. The output will be in `./Build/EmulatorX64/DEBUG_<compiler>/X64/loader.efi`. On macOS, the `<compiler>` is `XCODE5`. On Windows, it is generally `VS2022`. On most other systems it is `GCC`. 

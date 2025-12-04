@@ -14,10 +14,10 @@ echo ":: Building for ${MACHINE} on ${OPSYS}"
 
 if ! [ -f ${LIBDIR}/BaseLib.lib ]; then
   echo ":: Building EDK2 libraries"
-  (cd edk2; unset WORKSPACE EDK_TOOLS_PATH; ./EmulatorPkg/build.sh libraries)
+  (unset WORKSPACE EDK_TOOLS_PATH; ./EmulatorPkg/build.sh libraries)
 fi
 
 source edksetup.sh
-build -t XCODE5 -a ${MACHINE} -m MdeModulePkg/Application/Loader/Loader.inf
+build -t XCODE5 -a ${MACHINE} -m MdeModulePkg/Application/Loader/Loader.inf || exit 1
 
 echo ":: Finished"
