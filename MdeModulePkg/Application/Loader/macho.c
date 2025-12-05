@@ -1,7 +1,3 @@
-#include <Uefi.h>
-#include <Library/UefiLib.h>
-#include <Library/MemoryAllocationLib.h>
-#include <Library/BaseMemoryLib.h>
 #include "loader.h"
 
 
@@ -55,8 +51,9 @@ error:
 }
 
 
-void mapSegments(struct mach_header_64 *mh)
+int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE KernelFile)
 {
+    int size = 0;
     uint32_t offset = sizeof(struct mach_header_64);
     for(int i = 0; i < mh->ncmds; ++i) {
         const struct load_command *lc = (const struct load_command *)((UINT64)mh + offset);
@@ -65,8 +62,24 @@ void mapSegments(struct mach_header_64 *mh)
                 const struct segment_command_64 *ls = (const struct segment_command_64 *)lc;
                 CHAR16 segname[16];
                 AsciiStrToUnicodeStrS(ls->segname, segname, sizeof(segname));
-                Print(UEFI_STR("LC_SEGMENT_64 %s at %lx (%d) sz %lx\n"), 
+                if(!StrCmp(segname, UEFI_STR("__PRELINK_TEXT"))
+                    || !StrCmp(segname, UEFI_STR("__PRELINK_INFO"))
+                    || !StrCmp(segname, UEFI_STR("__LINKEDIT"))
+                    || ls->vmsize == 0)
+                    break;
+                Print(UEFI_STR("    %s at %lx (%d) sz %lx -> "),
                     segname, ls->vmaddr, offset, ls->vmsize);
+                VOID *physaddr = (VOID *)(ls->vmaddr & 0xffffffff);
+                UINTN size = ls->vmsize;
+                EFI_STATUS Status = gBS->AllocatePages(AllocateAnyPages, EfiLoaderData,
+                    EFI_SIZE_TO_PAGES(size), physaddr);
+                Print(UEFI_STR("%u pages at 0x%p [%r]\n"), EFI_SIZE_TO_PAGES(size),
+                    physaddr, Status);
+                if(!StrCmp(segname, UEFI_STR("__HIB")))
+                    *KernelEntry = (UINTN)physaddr; // this is where __start lives.
+                Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)physaddr);
+                if(EFI_ERROR(Status))
+                    Print(UEFI_STR("!! Error: failed to read kernel data!\n"));
                 break;
             }
 

@@ -1,7 +1,7 @@
 #include "loader.h"
 
-#define VERSION_STR UEFI_STR("v0.2 IN DEVELOPMENT")
-#define KERNEL_LOAD_ADDRESS 0x400000;
+#define VERSION_STR UEFI_STR("v0.3 IN DEVELOPMENT")
+#define KERNEL_LOAD_ADDRESS 0x100000;
 #define STACK_SIZE 128
 
 EFI_GUID gEfiDtbTableGuid = {0xb1b621d5, 0xf19c, 0x41a5, \
@@ -41,8 +41,7 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry)
         return Status;
     }
 
-    Print(UEFI_STR("Reading kernel headers\n"));
-    UINT64 size = 16384; // load first 16k - def enough for MH and LC
+    UINT64 size = sizeof(struct mach_header_64);
     Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)(*KernelBuffer));
     MachHeader = (struct mach_header_64 *)(*KernelBuffer);
     if(EFI_ERROR(Status) 
@@ -58,27 +57,16 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry)
         return Status;
     }
 
-    Print(UEFI_STR(":: Mach-O %u-bit %s executable. Flags: %04x\n%u commands, %u bytes\n"),
+    Print(UEFI_STR("\n:: Mach-O %u-bit %s executable. Flags: %04x [%u commands, %u bytes]\n"),
         MachHeader->magic == MH_MAGIC_64 ? 64 : 32,
         MachHeader->cputype == CPU_TYPE_X86_64 ? UEFI_STR("x86-64") : UEFI_STR("i386"),
         MachHeader->flags, MachHeader->ncmds, MachHeader->sizeofcmds);
-    
 
-    mapSegments(*KernelBuffer);
+    *KernelBuffer += size;
+    size = MachHeader->sizeofcmds;
+    Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)(*KernelBuffer));
+    size = mapSegments(MachHeader, KernelEntry, KernelFile);
 
-    size = 1048076;
-    *KernelEntry = 0;
-    *KernelBuffer = (VOID*)KERNEL_LOAD_ADDRESS;
-    Status = gBS->AllocatePages(AllocateAddress, EfiLoaderData,
-        EFI_SIZE_TO_PAGES(size), (EFI_PHYSICAL_ADDRESS*)KernelBuffer);
-    if (EFI_ERROR(Status)) {
-        KernelFile->Close(KernelFile);
-        Root->Close(Root);
-        return Status;
-    }
-
-    Print(UEFI_STR("Reading 1MB of /kernel to buffer\n"));
-    Status = KernelFile->Read(KernelFile, &size, *KernelBuffer);
     KernelFile->Close(KernelFile);
     Root->Close(Root);
     return EFI_SUCCESS;
@@ -133,11 +121,17 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 {
     EFI_STATUS Status;
     VOID *KernelBuffer = NULL;
-    UINTN KernelSize = 0;
+    UINTN KernelEntry = 0;
     EFI_HANDLE SMBIOSHandle, ACPIHandle, DTBHandle;
     VOID *SMBIOS = NULL; // SMBIOS table pointer
     VOID *ACPI = NULL; // ACPI table pointer
     VOID *DTB = NULL; // Device Table Blob pointer
+    UINTN MapKey, DescriptorSize;
+    UINT32 DescriptorVersion;
+    EFI_MEMORY_DESCRIPTOR *MemoryMap = NULL;
+    UINTN MemoryMapSize = 0;
+    UINT8 *region = NULL;
+    UINT64 physPages = 0;
 
     gST->ConOut->ClearScreen(gST->ConOut);
     Print(UEFI_STR(":: ravynOS EFI Loader %s\n\n"), VERSION_STR);
@@ -147,44 +141,59 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
         EFI_GUID guid = table[i].VendorGuid;
         if(CompareGUIDs(guid, gEfiSmbiosTableGuid) == 0 || CompareGUIDs(guid, gEfiSmbios3TableGuid) == 0) {
             SMBIOS = table[i].VendorTable;
-            Print(UEFI_STR("Found SMBIOS table at 0x%p\n"), SMBIOS);
+            Print(UEFI_STR("[] Found SMBIOS table at 0x%p\n"), SMBIOS);
         }
         else if(CompareGUIDs(guid, gEfiAcpiTableGuid) == 0) {
             ACPI = table[i].VendorTable;
-            Print(UEFI_STR("Found ACPI table at 0x%p\n"), ACPI);
+            Print(UEFI_STR("[] Found ACPI table at 0x%p\n"), ACPI);
         }
         else if(CompareGUIDs(guid, gEfiDtbTableGuid) == 0) {
             DTB = table[i].VendorTable;
-            Print(UEFI_STR("Found DTB table at 0x%p\n"), DTB);
+            Print(UEFI_STR("[] Found DTB table at 0x%p\n"), DTB);
         }
     }
 
-    Print(UEFI_STR("Looking for drivers\n"));
-    LoadDrivers(ImageHandle);
-
-    // --- Load kernelcache ---
-    Status = LoadKernel(&KernelBuffer, &KernelSize);
+    Status = gBS->GetMemoryMap(&MemoryMapSize, MemoryMap, &MapKey, &DescriptorSize, &DescriptorVersion);
+    if (Status == EFI_BUFFER_TOO_SMALL) {
+        MemoryMap = AllocatePool(MemoryMapSize);
+        Status = gBS->GetMemoryMap(&MemoryMapSize, MemoryMap, &MapKey, &DescriptorSize, &DescriptorVersion);
+    }
     if (EFI_ERROR(Status)) {
-        Print(UEFI_STR("Failed to load kernel: %r\n"), Status);
+        Print(UEFI_STR("!! Error: failed to retrieve memory map [%r]\n"), Status);
         return Status;
     }
-    Print(UEFI_STR("Kernel loaded: %u bytes at 0x%p\n"), KernelSize, KernelBuffer);
+
+    for(region = MemoryMap; region < ((UINT8 *)MemoryMap + MemoryMapSize); region += DescriptorSize) {
+        switch(((EFI_MEMORY_DESCRIPTOR *)region)->Type) {
+            case EfiConventionalMemory:
+            case EfiBootServicesCode:
+            case EfiBootServicesData:
+            case EfiLoaderCode:
+            case EfiLoaderData:
+                physPages += ((EFI_MEMORY_DESCRIPTOR *)region)->NumberOfPages;
+                break;
+        }
+    }
+
+    LoadDrivers(ImageHandle);
+    Status = LoadKernel(&KernelBuffer, &KernelEntry);
+    if (EFI_ERROR(Status))
+        return Status;
 
     VIDEO_INFO videoV1 = {0};
     VIDEO_BOOT video = {0};
 
-    // --- Prepare boot_args ---
     BOOT_ARGS BootArgs;
     SetMem(&BootArgs, sizeof(BootArgs), 0);
     BootArgs.Version = 2;
     BootArgs.EFIMode = 32;
     BootArgs.Flags = kBootArgsFlagHiDPI;
-    AsciiStrCpyS(BootArgs.CommandLine, 1024, "-v -s BootGraphics=No");
+    AsciiStrCpyS(BootArgs.CommandLine, 1024, "-v -s");
     BootArgs.VideoV1 = videoV1;
     BootArgs.DeviceTree = 0;
     BootArgs.DeviceTreeLength = 0;
     BootArgs.kaddr = KERNEL_LOAD_ADDRESS;
-    BootArgs.ksize = KernelSize;
+    BootArgs.ksize = 0; // FIXME: KernelSize
     BootArgs.kslide = 0;
     BootArgs.efiRuntimeServicesPageStart = (UINT32)(SystemTable->RuntimeServices);
     UINT32 size = SystemTable->RuntimeServices->Hdr.HeaderSize - sizeof(EFI_TABLE_HEADER);
@@ -212,46 +221,24 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     // BootArgs.APFSDataStart =
     // BootArgs.APFSDataSize =
 
-    // --- Get memory map ---
-    UINTN MapKey, DescriptorSize;
-    UINT32 DescriptorVersion;
-    EFI_MEMORY_DESCRIPTOR *MemoryMap = NULL;
-    UINTN MemoryMapSize = 0;
-    UINT8 *region = NULL;
-
-    Status = gBS->GetMemoryMap(&MemoryMapSize, MemoryMap, &MapKey, &DescriptorSize, &DescriptorVersion);
-    if (Status == EFI_BUFFER_TOO_SMALL) {
-        MemoryMap = AllocatePool(MemoryMapSize);
-        Status = gBS->GetMemoryMap(&MemoryMapSize, MemoryMap, &MapKey, &DescriptorSize, &DescriptorVersion);
-    }
-    if (EFI_ERROR(Status)) {
-        Print(UEFI_STR("Memory map error: %r\n"), Status);
-        return Status;
-    }
-
     BootArgs.MemoryMap = (UINT32)MemoryMap;
     BootArgs.MemoryMapSize = MemoryMapSize;
     BootArgs.MemoryMapDescriptorSize = DescriptorSize;
     BootArgs.MemoryMapDescriptorVersion = DescriptorVersion;
-
-    for(region = MemoryMap; region < ((UINT8 *)MemoryMap + MemoryMapSize); region += DescriptorSize) {
-        if(((EFI_MEMORY_DESCRIPTOR *)region)->Type == EfiConventionalMemory)
-            BootArgs.physMemSize += ((EFI_MEMORY_DESCRIPTOR *)region)->NumberOfPages;
-    }
-    BootArgs.physMemSize = BootArgs.physMemSize * EFI_PAGE_SIZE; // convert to bytes
+    BootArgs.physMemSize = physPages * EFI_PAGE_SIZE; // convert to bytes
 
     Print(UEFI_STR("%u MB usable memory found\n\n"), BootArgs.physMemSize/1024/1024);
 
     typedef void (*XnuEntry)(void);
-    XnuEntry KernelEntry = (XnuEntry)((UINT64)KernelBuffer);
-    Print(UEFI_STR(">>> Jumping to 0x%lx\n"), (UINT64)(KernelEntry));
+    XnuEntry _start = (XnuEntry)(KernelEntry);
+    Print(UEFI_STR(">>> Jumping to 0x%lx\n"), KernelEntry);
     asm(
         "movq %0, %%rax\n"
         "movq %1, %%rdi\n"
         "jmpq *%%rdi\n"
-        : : "mr"(&BootArgs), "mr"(KernelBuffer) : "rax", "rdi" // pass to xnu in eax
+        : : "mr"(&BootArgs), "r"(KernelEntry) : "rax", "rdi" // pass to xnu in eax
     );
-    KernelEntry();
+    _start();
 
     while(1);
     return EFI_SUCCESS;
