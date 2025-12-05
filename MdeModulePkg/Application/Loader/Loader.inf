@@ -18,6 +18,7 @@
 
 [Sources]
   loader.c
+  macho.c
 
 [Packages]
   MdePkg/MdePkg.dec

@@ -1,12 +1,8 @@
-#include <Uefi.h>
-#include <Library/UefiBootServicesTableLib.h>
-#include <Library/UefiLib.h>
-#include <Library/MemoryAllocationLib.h>
-#include <Library/BaseMemoryLib.h>
-#include <Library/FileHandleLib.h>
-#include <Protocol/SimpleFileSystem.h>
-#include <Guid/SmBios.h>
-#include <Guid/Acpi.h>
+#include "loader.h"
+
+#define VERSION_STR UEFI_STR("v0.2 IN DEVELOPMENT")
+#define KERNEL_LOAD_ADDRESS 0x400000;
+#define STACK_SIZE 128
 
 EFI_GUID gEfiDtbTableGuid = {0xb1b621d5, 0xf19c, 0x41a5, \
         {0x83, 0x0b, 0xd9, 0x15, 0x2c, 0x69, 0xaa, 0xe0}};
@@ -14,146 +10,75 @@ EFI_GUID gEfiAcpiTableGuid = EFI_ACPI_20_TABLE_GUID;
 EFI_GUID gEfiSmbios3TableGuid = SMBIOS3_TABLE_GUID;
 EFI_GUID gEfiSmbiosTableGuid = SMBIOS_TABLE_GUID;
 
-#define VERSION_STR UEFI_STR("v0.2 IN DEVELOPMENT")
-#define KERNEL_LOAD_ADDRESS 0x40000000 // 1 GB
-#define STACK_SIZE 128
-
-#define UEFI_STR(s) ((CHAR16 *)u##s)
-
-// Bitfields for boot_args->flags
-#define kBootArgsFlagRebootOnPanic      (1 << 0)
-#define kBootArgsFlagHiDPI              (1 << 1)
-#define kBootArgsFlagBlack              (1 << 2)
-#define kBootArgsFlagCSRActiveConfig    (1 << 3)
-#define kBootArgsFlagCSRConfigMode      (1 << 4)
-#define kBootArgsFlagCSRBoot            (1 << 5)
-#define kBootArgsFlagBlackBg            (1 << 6)
-#define kBootArgsFlagLoginUI            (1 << 7)
-#define kBootArgsFlagInstallUI          (1 << 8)
-
-// 'display' modes
-#define GRAPHICS_MODE         1
-#define FB_TEXT_MODE          2
-
-typedef struct {
-    UINT32 baseAddr;
-    UINT32 display;
-    UINT32 bytesPerRow;
-    UINT32 width;
-    UINT32 height;
-    UINT32 depth;
-} VIDEO_INFO;
-
-typedef struct {
-    UINT32 display;
-    UINT32 bytesPerRow;
-    UINT32 width;
-    UINT32 height;
-    UINT32 depth;
-    UINT8 rotate;
-    UINT8 reserved0[3];
-    UINT32 reserved1[6];
-    UINT64 baseAddr;
-} VIDEO_BOOT;
-
-
-typedef struct {
-    UINT16 Revision; // must be 0x0
-    UINT16 Version; // must be 0x2
-    UINT8 EFIMode; // 32 or 64
-    UINT8 DebugMode; // bitfield
-    UINT16 Flags;   // see boot flags above
-    CHAR8 CommandLine[1024];
-    UINT32 MemoryMap; // physical addr
-    UINT32 MemoryMapSize;
-    UINT32 MemoryMapDescriptorSize;
-    UINT32 MemoryMapDescriptorVersion;
-    VIDEO_INFO VideoV1;
-    UINT32 DeviceTree;
-    UINT32 DeviceTreeLength;
-    UINT32 kaddr; // physical addr of kernel __TEXT
-    UINT32 ksize; // kernel text + data + EFI
-    UINT32 efiRuntimeServicesPageStart;
-    UINT32 efiRuntimeServicesPageCount;
-    UINT64 efiRuntimeServicesVirtualPageStart;
-    UINT32 efiSystemTable;
-    UINT32 kslide;
-    UINT32 perfDataStart; // physical addr of log
-    UINT32 perfDataSize;
-    UINT32 keystoreDataStart;
-    UINT32 keystoreDataSize;
-    UINT64 bootMemStart;
-    UINT64 bootMemSize;
-    UINT64 physMemSize;
-    UINT64 FSBFreq;
-    UINT64 pciConfigSpaceBaseAddr;
-    UINT32 pciConfigSpaceStartBusNumber;
-    UINT32 pciConfigSpaceEndBusNumber;
-    UINT32 csrActiveConfig;
-    UINT32 csrCapabilities;
-    UINT32 boot_smc_plimit;
-    UINT16 bootProgressMeterStart;
-    UINT16 bootProgressMeterEnd;
-    VIDEO_BOOT Video;
-    UINT32 APFSDataStart;
-    UINT32 APFSDataSize;
-    UINT32 _reserved[710];
-} BOOT_ARGS;
-extern char assert_boot_args_size_is_4096[sizeof(BOOT_ARGS) == 4096 ? 1 : -1];
 
 // --- Load kernelcache from filesystem ---
-EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelSize)
+EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry)
 {
     EFI_STATUS Status;
     EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs;
     EFI_FILE_HANDLE Root, KernelFile;
+    struct mach_header_64 *MachHeader;
+
+    *KernelBuffer = (VOID *)KERNEL_LOAD_ADDRESS;
+    Status = gBS->AllocatePages(AllocateAddress, EfiLoaderData,
+        EFI_SIZE_TO_PAGES(16384), (EFI_PHYSICAL_ADDRESS *)*KernelBuffer);
+    if(EFI_ERROR(Status)) {
+        Print(UEFI_STR("Failed to allocate memory: %r\n"), Status);
+        return Status;
+    }
 
     Status = gBS->LocateProtocol(&gEfiSimpleFileSystemProtocolGuid, NULL, (VOID**)&Fs);
     if (EFI_ERROR(Status))
         return Status;
 
-    Print(UEFI_STR("open volume\n"));
     Status = Fs->OpenVolume(Fs, &Root);
     if (EFI_ERROR(Status))
         return Status;
 
-    Print(UEFI_STR("open kernel file\n"));
     Status = Root->Open(Root, &KernelFile, UEFI_STR("kernel"), EFI_FILE_MODE_READ, 0);
     if (EFI_ERROR(Status)) {
         Root->Close(Root);
         return Status;
     }
 
-    Print(UEFI_STR("allocate zero pool\n"));
-    EFI_FILE_INFO *FileInfo = AllocateZeroPool(sizeof(EFI_FILE_INFO) + 512);
-    if (!FileInfo) {
-        KernelFile->Close(KernelFile);
-        Root->Close(Root);
-        return EFI_OUT_OF_RESOURCES;
-    }
-
-    Print(UEFI_STR("file info\n"));
-    UINTN FileInfoSize = sizeof(EFI_FILE_INFO) + 512;
-    Status = KernelFile->GetInfo(KernelFile, &gEfiFileInfoGuid, &FileInfoSize, FileInfo);
-    if (EFI_ERROR(Status)) {
-        KernelFile->Close(KernelFile);
-        Root->Close(Root);
+    Print(UEFI_STR("Reading kernel headers\n"));
+    UINT64 size = 16384; // load first 16k - def enough for MH and LC
+    Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)(*KernelBuffer));
+    MachHeader = (struct mach_header_64 *)(*KernelBuffer);
+    if(EFI_ERROR(Status) 
+        || MachHeader->filetype != MH_EXECUTE
+        || (MachHeader->cputype != CPU_TYPE_X86_64 && MachHeader->cputype != (unsigned)CPU_TYPE_ANY))
+    {
+        if(EFI_ERROR(Status))
+            Print(UEFI_STR("Read Error: %r\n"), Status);
+        else {
+            Print(UEFI_STR("Incorrect Mach file header\n"));
+            Status = EFI_UNSUPPORTED;
+        }
         return Status;
     }
 
-    Print(UEFI_STR("allocate pages\n"));
-    *KernelSize = FileInfo->FileSize;
+    Print(UEFI_STR(":: Mach-O %u-bit %s executable. Flags: %04x\n%u commands, %u bytes\n"),
+        MachHeader->magic == MH_MAGIC_64 ? 64 : 32,
+        MachHeader->cputype == CPU_TYPE_X86_64 ? UEFI_STR("x86-64") : UEFI_STR("i386"),
+        MachHeader->flags, MachHeader->ncmds, MachHeader->sizeofcmds);
+    
+
+    mapSegments(*KernelBuffer);
+
+    size = 1048076;
+    *KernelEntry = 0;
     *KernelBuffer = (VOID*)KERNEL_LOAD_ADDRESS;
     Status = gBS->AllocatePages(AllocateAddress, EfiLoaderData,
-        EFI_SIZE_TO_PAGES(*KernelSize), (EFI_PHYSICAL_ADDRESS*)KernelBuffer);
+        EFI_SIZE_TO_PAGES(size), (EFI_PHYSICAL_ADDRESS*)KernelBuffer);
     if (EFI_ERROR(Status)) {
         KernelFile->Close(KernelFile);
         Root->Close(Root);
         return Status;
     }
 
-    Print(UEFI_STR("reading /kernel to buffer\n"));
-    Status = KernelFile->Read(KernelFile, KernelSize, *KernelBuffer);
+    Print(UEFI_STR("Reading 1MB of /kernel to buffer\n"));
+    Status = KernelFile->Read(KernelFile, &size, *KernelBuffer);
     KernelFile->Close(KernelFile);
     Root->Close(Root);
     return EFI_SUCCESS;
