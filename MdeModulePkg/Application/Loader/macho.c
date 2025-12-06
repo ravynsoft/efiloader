@@ -82,6 +82,7 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
         switch(lc->cmd) {
             case LC_SEGMENT_64: {
                 const struct segment_command_64 *ls = (const struct segment_command_64 *)lc;
+                size += ls->vmsize;
                 CHAR16 segname[16];
                 AsciiStrToUnicodeStrS(ls->segname, segname, sizeof(segname));
                 if(!StrCmp(segname, UEFI_STR("__PRELINK_TEXT"))
@@ -111,4 +112,6 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
         }
         offset += lc->cmdsize;
     }
+
+    return size;
 }

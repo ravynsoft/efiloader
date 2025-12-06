@@ -23,7 +23,7 @@
 #include "loader.h"
 
 #define VERSION_STR UEFI_STR("v0.4 IN DEVELOPMENT")
-#define KERNEL_LOAD_ADDRESS 0x2000000; // 32 MB
+#define KERNEL_LOAD_ADDRESS 0x100000; // 1 MB
 
 EFI_GUID gEfiDtbTableGuid = {0xb1b621d5, 0xf19c, 0x41a5, \
         {0x83, 0x0b, 0xd9, 0x15, 0x2c, 0x69, 0xaa, 0xe0}};
@@ -31,7 +31,6 @@ EFI_GUID gEfiAcpiTableGuid = EFI_ACPI_20_TABLE_GUID;
 EFI_GUID gEfiSmbios3TableGuid = SMBIOS3_TABLE_GUID;
 EFI_GUID gEfiSmbiosTableGuid = SMBIOS_TABLE_GUID;
 
-// --- Load kernelcache from filesystem ---
 EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry)
 {
     EFI_STATUS Status;
@@ -248,13 +247,15 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     BootArgs.physMemSize = physPages * EFI_PAGE_SIZE; // convert to bytes
 
     Print(UEFI_STR("\n%u MB usable memory found\n"), BootArgs.physMemSize / MB);
-
     Print(UEFI_STR("\nStarting kernel at 0x%lx\n"), KernelEntry);
+    gBS->ExitBootServices(ImageHandle, MapKey);
+    
+    /* jump to kernel _start with bootargs in eax */
     asm(
         "movq %0, %%rax\n"
         "movq %1, %%rdi\n"
         "jmpq *%%rdi\n"
-        : : "mr"(&BootArgs), "r"(KernelEntry) : "rax", "rdi" // pass args to xnu in eax
+        : : "mr"(&BootArgs), "r"(KernelEntry) : "rax", "rdi"
     );
 
     return EFI_SUCCESS;
