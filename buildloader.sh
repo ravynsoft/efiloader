@@ -8,7 +8,7 @@ echo "---------------------------------"
 MACHINE=$(uname -m)
 OPSYS=$(uname -s)
 _SDK=${SDK:-/Library/Developer/ravynOS.sdk}
-export CPATH=${_SDK}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers:${SDK}/usr/include
+export CPATH=${_SDK}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers:${_SDK}/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders:${SDK}/usr/include
 
 case ${MACHINE} in
   x86_64) MACHINE=X64 ;;

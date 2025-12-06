@@ -1,3 +1,25 @@
+/*
+ * Copyright (C) 2025 Zoe Knox <zoe@pixin.net>
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+
 #include "loader.h"
 
 
@@ -67,7 +89,7 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
                     || !StrCmp(segname, UEFI_STR("__LINKEDIT"))
                     || ls->vmsize == 0)
                     break;
-                Print(UEFI_STR("    %s at %lx (%d) sz %lx -> "),
+                Print(UEFI_STR("   %s at %lx (%d) sz %lx -> "),
                     segname, ls->vmaddr, offset, ls->vmsize);
                 VOID *physaddr = (VOID *)(ls->vmaddr & 0xffffffff);
                 UINTN size = ls->vmsize;
@@ -76,7 +98,8 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
                 Print(UEFI_STR("%u pages at 0x%p [%r]\n"), EFI_SIZE_TO_PAGES(size),
                     physaddr, Status);
                 if(!StrCmp(segname, UEFI_STR("__HIB")))
-                    *KernelEntry = (UINTN)physaddr; // this is where __start lives.
+                    *KernelEntry = (UINTN)physaddr + 0xa7000; // this is where _start lives. FIXME: look up symbol
+                Status = KernelFile->SetPosition(KernelFile, ls->fileoff);
                 Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)physaddr);
                 if(EFI_ERROR(Status))
                     Print(UEFI_STR("!! Error: failed to read kernel data!\n"));

@@ -1,15 +1,35 @@
+/*
+ * Copyright (C) 2025 Zoe Knox <zoe@pixin.net>
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+
 #include "loader.h"
 
-#define VERSION_STR UEFI_STR("v0.3 IN DEVELOPMENT")
-#define KERNEL_LOAD_ADDRESS 0x100000;
-#define STACK_SIZE 128
+#define VERSION_STR UEFI_STR("v0.4 IN DEVELOPMENT")
+#define KERNEL_LOAD_ADDRESS 0x2000000; // 32 MB
 
 EFI_GUID gEfiDtbTableGuid = {0xb1b621d5, 0xf19c, 0x41a5, \
         {0x83, 0x0b, 0xd9, 0x15, 0x2c, 0x69, 0xaa, 0xe0}};
 EFI_GUID gEfiAcpiTableGuid = EFI_ACPI_20_TABLE_GUID;
 EFI_GUID gEfiSmbios3TableGuid = SMBIOS3_TABLE_GUID;
 EFI_GUID gEfiSmbiosTableGuid = SMBIOS_TABLE_GUID;
-
 
 // --- Load kernelcache from filesystem ---
 EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry)
@@ -227,19 +247,15 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     BootArgs.MemoryMapDescriptorVersion = DescriptorVersion;
     BootArgs.physMemSize = physPages * EFI_PAGE_SIZE; // convert to bytes
 
-    Print(UEFI_STR("%u MB usable memory found\n\n"), BootArgs.physMemSize/1024/1024);
+    Print(UEFI_STR("\n%u MB usable memory found\n"), BootArgs.physMemSize / MB);
 
-    typedef void (*XnuEntry)(void);
-    XnuEntry _start = (XnuEntry)(KernelEntry);
-    Print(UEFI_STR(">>> Jumping to 0x%lx\n"), KernelEntry);
+    Print(UEFI_STR("\nStarting kernel at 0x%lx\n"), KernelEntry);
     asm(
         "movq %0, %%rax\n"
         "movq %1, %%rdi\n"
         "jmpq *%%rdi\n"
-        : : "mr"(&BootArgs), "r"(KernelEntry) : "rax", "rdi" // pass to xnu in eax
+        : : "mr"(&BootArgs), "r"(KernelEntry) : "rax", "rdi" // pass args to xnu in eax
     );
-    _start();
 
-    while(1);
     return EFI_SUCCESS;
 }
