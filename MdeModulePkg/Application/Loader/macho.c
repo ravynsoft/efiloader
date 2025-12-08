@@ -92,12 +92,24 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
                     break;
                 Print(UEFI_STR("   %s at %lx (%d) sz %lx -> "),
                     segname, ls->vmaddr, offset, ls->vmsize);
+
                 VOID *physaddr = (VOID *)(ls->vmaddr & 0xffffffff);
                 UINTN size = ls->vmsize;
                 EFI_STATUS Status = gBS->AllocatePages(AllocateAnyPages, EfiLoaderData,
                     EFI_SIZE_TO_PAGES(size), physaddr);
                 Print(UEFI_STR("%u pages at 0x%p [%r]\n"), EFI_SIZE_TO_PAGES(size),
                     physaddr, Status);
+
+                SetMem(physaddr, size, 0);
+                for(int x=0; x<ls->nsects; ++x) {
+                    const struct section_64 *lsect = lc + sizeof(struct segment_command_64)
+                        + x * sizeof(struct section_64);
+                    AsciiStrToUnicodeStrS(lsect->sectname, segname, sizeof(segname));
+                    Print(UEFI_STR("     %s at %lx (%d) sz %lx align %x, rel %d at %d, flags %x\n"),
+                        segname, lsect->addr, lsect->offset, lsect->size, lsect->align,
+                        lsect->nreloc, lsect->reloff, lsect->flags);
+                }
+
                 if(!StrCmp(segname, UEFI_STR("__HIB")))
                     *KernelEntry = (UINTN)physaddr + 0xa7000; // this is where _start lives. FIXME: look up symbol
                 Status = KernelFile->SetPosition(KernelFile, ls->fileoff);

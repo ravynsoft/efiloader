@@ -45,6 +45,7 @@ extern EFI_GUID gEfiSmbiosTableGuid;
 #define UEFI_STR(s) ((CHAR16 *)u##s)
 #define GB (1024*1024*1024)
 #define MB (1024*1024)
+#define KB 1024
 
 
 // Bitfields for boot_args->flags
