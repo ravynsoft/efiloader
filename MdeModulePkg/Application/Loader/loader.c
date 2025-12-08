@@ -22,7 +22,7 @@
 
 #include "loader.h"
 
-#define VERSION_STR UEFI_STR("v0.4 IN DEVELOPMENT")
+#define VERSION_STR UEFI_STR("v0.5 IN DEVELOPMENT")
 #define KERNEL_LOAD_ADDRESS 0x100000; // 1 MB
 
 EFI_GUID gEfiDtbTableGuid = {0xb1b621d5, 0xf19c, 0x41a5, \
@@ -31,7 +31,41 @@ EFI_GUID gEfiAcpiTableGuid = EFI_ACPI_20_TABLE_GUID;
 EFI_GUID gEfiSmbios3TableGuid = SMBIOS3_TABLE_GUID;
 EFI_GUID gEfiSmbiosTableGuid = SMBIOS_TABLE_GUID;
 
-EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry)
+EFI_STATUS GetVideoInfo(VIDEO_INFO *v1, VIDEO_BOOT *v)
+{
+    EFI_STATUS Status;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *GOP;
+
+    Status = gBS->LocateProtocol(&gEfiGraphicsOutputProtocolGuid, NULL, (VOID**)&GOP);
+    if (EFI_ERROR(Status))
+        return Status;
+
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *mode = GOP->Mode;
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = mode->Info;
+    Print(UEFI_STR("Video mode %d fb 0x%lx-0x%lx v%d %dx%d px fmt %d px stride %d\n"),
+        mode->Mode, mode->FrameBufferBase, mode->FrameBufferBase + mode->FrameBufferSize,
+        info->Version, info->HorizontalResolution, info->VerticalResolution,
+        info->PixelFormat, info->PixelsPerScanLine);
+
+    v1->baseAddr = mode->FrameBufferBase;
+    v1->display = 1;
+    v1->bytesPerRow = info->PixelsPerScanLine * 4; // UEFI only has RGBA, BGRA, or mono
+    v1->width = info->HorizontalResolution;
+    v1->height = info->VerticalResolution;
+    v1->depth = 4;
+
+    v->display = 1;
+    v->bytesPerRow = info->PixelsPerScanLine * 4;
+    v->width = info->HorizontalResolution;
+    v->height = info->VerticalResolution;
+    v->depth = 4;
+    v->rotate = 0;
+    v->baseAddr = mode->FrameBufferBase;
+
+    return EFI_SUCCESS;
+}
+
+EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize)
 {
     EFI_STATUS Status;
     EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs;
@@ -84,7 +118,7 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry)
     *KernelBuffer += size;
     size = MachHeader->sizeofcmds;
     Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)(*KernelBuffer));
-    size = mapSegments(MachHeader, KernelEntry, KernelFile);
+    *KernelSize = mapSegments(MachHeader, KernelEntry, KernelFile);
 
     KernelFile->Close(KernelFile);
     Root->Close(Root);
@@ -140,7 +174,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 {
     EFI_STATUS Status;
     VOID *KernelBuffer = NULL;
-    UINTN KernelEntry = 0;
+    UINTN KernelEntry = 0, KernelSize = 0;
     EFI_HANDLE SMBIOSHandle, ACPIHandle, DTBHandle;
     VOID *SMBIOS = NULL; // SMBIOS table pointer
     VOID *ACPI = NULL; // ACPI table pointer
@@ -193,32 +227,35 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
                 break;
         }
     }
-
-    LoadDrivers(ImageHandle);
-    Status = LoadKernel(&KernelBuffer, &KernelEntry);
-    if (EFI_ERROR(Status))
-        return Status;
+    Print(UEFI_STR("\n%u MB usable memory found\n"), physPages * EFI_PAGE_SIZE / MB);
 
     VIDEO_INFO videoV1 = {0};
     VIDEO_BOOT video = {0};
+    GetVideoInfo(&videoV1, &video);
+
+    LoadDrivers(ImageHandle);
+    
+    Status = LoadKernel(&KernelBuffer, &KernelEntry, &KernelSize);
+    if (EFI_ERROR(Status))
+        return Status;
 
     BOOT_ARGS BootArgs;
     SetMem(&BootArgs, sizeof(BootArgs), 0);
     BootArgs.Version = 2;
-    BootArgs.EFIMode = 32;
+    BootArgs.EFIMode = 64;
     BootArgs.Flags = kBootArgsFlagHiDPI;
     AsciiStrCpyS(BootArgs.CommandLine, 1024, "-v -s");
     BootArgs.VideoV1 = videoV1;
     BootArgs.DeviceTree = 0;
     BootArgs.DeviceTreeLength = 0;
     BootArgs.kaddr = KERNEL_LOAD_ADDRESS;
-    BootArgs.ksize = 0; // FIXME: KernelSize
+    BootArgs.ksize = KernelSize;
     BootArgs.kslide = 0;
     BootArgs.efiRuntimeServicesPageStart = (UINT32)(SystemTable->RuntimeServices);
     UINT32 size = SystemTable->RuntimeServices->Hdr.HeaderSize - sizeof(EFI_TABLE_HEADER);
     UINT32 pages = size / EFI_PAGE_SIZE + 1;
     BootArgs.efiRuntimeServicesPageCount = pages;
-    BootArgs.efiRuntimeServicesVirtualPageStart = 0;
+    BootArgs.efiRuntimeServicesVirtualPageStart = (UINT64)(SystemTable->RuntimeServices);
     BootArgs.efiSystemTable = (UINT32)SystemTable;
     BootArgs.perfDataStart = 0;
     BootArgs.perfDataSize = 0;
@@ -246,7 +283,6 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     BootArgs.MemoryMapDescriptorVersion = DescriptorVersion;
     BootArgs.physMemSize = physPages * EFI_PAGE_SIZE; // convert to bytes
 
-    Print(UEFI_STR("\n%u MB usable memory found\n"), BootArgs.physMemSize / MB);
     Print(UEFI_STR("\nStarting kernel at 0x%lx\n"), KernelEntry);
     gBS->ExitBootServices(ImageHandle, MapKey);
     
