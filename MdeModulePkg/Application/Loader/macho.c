@@ -72,6 +72,8 @@ error:
     return 0;
 }
 
+#define SECTION_TYPE(x) ((UINT32)x & 0xff000000)
+#define SECTION_ATTR(x) ((UINT32)x & 0xffffff)
 
 int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE KernelFile)
 {
@@ -83,39 +85,45 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
             case LC_SEGMENT_64: {
                 const struct segment_command_64 *ls = (const struct segment_command_64 *)lc;
                 size += ls->vmsize;
-                CHAR16 segname[16];
+                CHAR16 segname[16], sectname[16];
                 AsciiStrToUnicodeStrS(ls->segname, segname, sizeof(segname));
-                if(!StrCmp(segname, UEFI_STR("__PRELINK_TEXT"))
-                    || !StrCmp(segname, UEFI_STR("__PRELINK_INFO"))
-                    || !StrCmp(segname, UEFI_STR("__LINKEDIT"))
-                    || ls->vmsize == 0)
-                    break;
-                Print(UEFI_STR("   %s at %lx (%d) sz %lx -> "),
+#ifdef DEBUG_LOADER
+                Print(UEFI_STR("  %s at %lx (%d) sz %lx\n"),
                     segname, ls->vmaddr, offset, ls->vmsize);
+#endif
+                if(ls->vmsize == 0)
+                    break;
 
                 VOID *physaddr = (VOID *)(ls->vmaddr & 0xffffffff);
                 UINTN size = ls->vmsize;
                 EFI_STATUS Status = gBS->AllocatePages(AllocateAnyPages, EfiLoaderData,
                     EFI_SIZE_TO_PAGES(size), physaddr);
-                Print(UEFI_STR("%u pages at 0x%p [%r]\n"), EFI_SIZE_TO_PAGES(size),
-                    physaddr, Status);
-
                 SetMem(physaddr, size, 0);
-                for(int x=0; x<ls->nsects; ++x) {
-                    const struct section_64 *lsect = lc + sizeof(struct segment_command_64)
-                        + x * sizeof(struct section_64);
-                    AsciiStrToUnicodeStrS(lsect->sectname, segname, sizeof(segname));
-                    Print(UEFI_STR("     %s at %lx (%d) sz %lx align %x, rel %d at %d, flags %x\n"),
-                        segname, lsect->addr, lsect->offset, lsect->size, lsect->align,
-                        lsect->nreloc, lsect->reloff, lsect->flags);
-                }
 
-                if(!StrCmp(segname, UEFI_STR("__HIB")))
-                    *KernelEntry = (UINTN)physaddr + 0xa7000; // this is where _start lives. FIXME: look up symbol
-                Status = KernelFile->SetPosition(KernelFile, ls->fileoff);
-                Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)physaddr);
-                if(EFI_ERROR(Status))
-                    Print(UEFI_STR("!! Error: failed to read kernel data!\n"));
+                struct section_64 *lsect = 
+                    (struct section_64 *)((UINT64)(((UINT64)ls) + sizeof(struct segment_command_64)));
+                for(int x=0; x<ls->nsects; ++x) {
+                    AsciiStrToUnicodeStrS(lsect->sectname, sectname, sizeof(sectname));
+
+#ifdef DEBUG_LOADER
+                    Print(UEFI_STR("   %s at %lx (%d) sz %lx align %x, rel %d at %d, flags %x\n"),
+                        sectname, lsect->addr, lsect->offset, lsect->size, lsect->align,
+                        lsect->nreloc, lsect->reloff, lsect->flags);
+#endif
+                    if(!StrCmp(segname, UEFI_STR("__HIB")) && !StrCmp(sectname, UEFI_STR("__text")))
+                        *KernelEntry = (UINT32)lsect->addr; // _start is the first routine
+
+                    Status = EFI_SUCCESS;
+                    if(lsect->size) {
+                        Status = KernelFile->SetPosition(KernelFile, lsect->offset);
+                        size = lsect->size;
+                        physaddr = (void *)(lsect->addr & 0xffffffff);
+                        Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)physaddr);
+                    }
+                    if(EFI_ERROR(Status))
+                        Print(UEFI_STR("!! Error: failed to read kernel data!\n"));
+                    lsect = (struct section_64 *)((UINT64)lsect + sizeof(struct section_64));
+                }
                 break;
             }
 
