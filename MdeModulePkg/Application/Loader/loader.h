@@ -47,7 +47,6 @@ extern EFI_GUID gEfiSmbiosTableGuid;
 #define MB (1024*1024)
 #define KB 1024
 
-
 // Bitfields for boot_args->flags
 #define kBootArgsFlagRebootOnPanic      (1 << 0)
 #define kBootArgsFlagHiDPI              (1 << 1)
@@ -83,7 +82,6 @@ typedef struct {
     UINT32 reserved1[6];
     UINT64 baseAddr;
 } VIDEO_BOOT;
-
 
 typedef struct {
     UINT16 Revision; // must be 0x0
@@ -129,11 +127,35 @@ typedef struct {
 } BOOT_ARGS;
 extern char assert_boot_args_size_is_4096[sizeof(BOOT_ARGS) == 4096 ? 1 : -1];
 
+typedef struct {
+    UINT32 magic;
+    UINT32 totalsize;
+    UINT32 off_dt_struct;
+    UINT32 off_dt_strings;
+    UINT32 off_mem_rsvmap;
+    UINT32 version;
+    UINT32 last_comp_version;
+    UINT32 boot_cpuid_phys;
+    UINT32 size_dt_strings;
+    UINT32 size_dt_struct;
+} FDT_HDR;
+
 #define BIND_TYPE_THREADED_BIND 100
 #define BIND_TYPE_THREADED_REBASE 102
 
 UINT64 readULEB128(const UINT8 **p, const UINT8 *end);
 INT64 readSLEB128(const UINT8 **p, const UINT8 *end);
 int mapSegments(struct mach_header_64 *mh, UINTN *entry, EFI_FILE_HANDLE KernelFile);
+
+UINTN BuildDTBFromACPI(VOID *ACPI, VOID **DTB);
+
+FDT_HDR *FdtCreateEmpty(VOID);
+EFI_STATUS FdtCreateNode(FDT_HDR *hdr, CHAR8 *ParentPath, CHAR8 *Name);
+EFI_STATUS FdtSetProperty(FDT_HDR *hdr, CHAR8 *NodePath, CHAR8 *Name, VOID *Data, UINT32 Len);
+UINT8 *FdtGetProperty(FDT_HDR *hdr, UINT8 *NodePtr, CHAR8 *Name, UINT32 *OutLen);
+EFI_STATUS FdtDeleteProperty(FDT_HDR *hdr, CHAR8 *NodePath, CHAR8 *Name);
+UINT8 *FdtFindNode(FDT_HDR *hdr, CHAR8 *Path);
+EFI_STATUS FdtDeleteNode(FDT_HDR *hdr, CHAR8 *Path);
+VOID FdtDump(FDT_HDR *hdr);
 
 #endif // __LOADER_H

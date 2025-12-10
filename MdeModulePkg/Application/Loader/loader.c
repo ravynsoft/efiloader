@@ -24,6 +24,7 @@
 
 #define VERSION_STR UEFI_STR("v0.5 IN DEVELOPMENT")
 #define KERNEL_LOAD_ADDRESS 0x100000; // 1 MB
+#define ARGS_ADDR 0x5000000 // 80 MB
 
 EFI_GUID gEfiDtbTableGuid = {0xb1b621d5, 0xf19c, 0x41a5, \
         {0x83, 0x0b, 0xd9, 0x15, 0x2c, 0x69, 0xaa, 0xe0}};
@@ -42,10 +43,9 @@ EFI_STATUS GetVideoInfo(VIDEO_INFO *v1, VIDEO_BOOT *v)
 
     EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *mode = GOP->Mode;
     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = mode->Info;
-    Print(UEFI_STR("Video mode %d fb 0x%lx-0x%lx v%d %dx%d px fmt %d px stride %d\n"),
-        mode->Mode, mode->FrameBufferBase, mode->FrameBufferBase + mode->FrameBufferSize,
-        info->Version, info->HorizontalResolution, info->VerticalResolution,
-        info->PixelFormat, info->PixelsPerScanLine);
+    Print(UEFI_STR("[] Framebuffer: %dx%dx32 %d MB @0x%lx\n"),
+        info->HorizontalResolution, info->VerticalResolution,
+        mode->FrameBufferSize / MB, mode->FrameBufferBase);
 
     v1->baseAddr = mode->FrameBufferBase;
     v1->display = 1;
@@ -70,11 +70,10 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
     EFI_STATUS Status;
     EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs;
     EFI_FILE_HANDLE Root, KernelFile;
-    struct mach_header_64 *MachHeader;
+    struct mach_header_64 *MachHeader = (VOID *)ARGS_ADDR;
 
-    *KernelBuffer = (VOID *)KERNEL_LOAD_ADDRESS;
     Status = gBS->AllocatePages(AllocateAddress, EfiLoaderData,
-        EFI_SIZE_TO_PAGES(16384), (EFI_PHYSICAL_ADDRESS *)*KernelBuffer);
+        EFI_SIZE_TO_PAGES(16384), (EFI_PHYSICAL_ADDRESS *)MachHeader);
     if(EFI_ERROR(Status)) {
         Print(UEFI_STR("Failed to allocate memory: %r\n"), Status);
         return Status;
@@ -95,8 +94,7 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
     }
 
     UINT64 size = sizeof(struct mach_header_64);
-    Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)(*KernelBuffer));
-    MachHeader = (struct mach_header_64 *)(*KernelBuffer);
+    Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)MachHeader);
     if(EFI_ERROR(Status) 
         || MachHeader->filetype != MH_EXECUTE
         || (MachHeader->cputype != CPU_TYPE_X86_64 && MachHeader->cputype != (unsigned)CPU_TYPE_ANY))
@@ -115,14 +113,18 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
         MachHeader->cputype == CPU_TYPE_X86_64 ? UEFI_STR("x86-64") : UEFI_STR("i386"),
         MachHeader->flags, MachHeader->ncmds, MachHeader->sizeofcmds);
 
-    *KernelBuffer += size;
-    size = MachHeader->sizeofcmds;
-    Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)(*KernelBuffer));
-    *KernelSize = mapSegments(MachHeader, KernelEntry, KernelFile);
+    size += MachHeader->sizeofcmds;
+    KernelFile->SetPosition(KernelFile, 0);
+    Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)MachHeader);
+
+    if(!EFI_ERROR(Status)) {
+        *KernelBuffer = (VOID *)KERNEL_LOAD_ADDRESS;
+        *KernelSize = mapSegments(MachHeader, KernelEntry, KernelFile);
+    }
 
     KernelFile->Close(KernelFile);
     Root->Close(Root);
-    return EFI_SUCCESS;
+    return Status;
 }
 
 // --- Load any necessary file system drivers before reading kernel ---
@@ -179,34 +181,17 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     VOID *SMBIOS = NULL; // SMBIOS table pointer
     VOID *ACPI = NULL; // ACPI table pointer
     VOID *DTB = NULL; // Device Table Blob pointer
-    UINTN MapKey, DescriptorSize;
+    UINTN DTBLength = 0;
+    UINTN MapKey, DescriptorSize, MemoryMapSize = 0;
+    UINT64 physPages = 0;
     UINT32 DescriptorVersion;
     EFI_MEMORY_DESCRIPTOR *MemoryMap = NULL;
-    UINTN MemoryMapSize = 0;
     UINT8 *region = NULL;
-    UINT64 physPages = 0;
 
     gST->ConOut->ClearScreen(gST->ConOut);
     Print(UEFI_STR(":: ravynOS EFI Loader %s\n\n"), VERSION_STR);
 
-    EFI_CONFIGURATION_TABLE *table = SystemTable->ConfigurationTable;
-    for(int i = 0; i < SystemTable->NumberOfTableEntries; ++i) {
-        EFI_GUID guid = table[i].VendorGuid;
-        if(CompareGUIDs(guid, gEfiSmbiosTableGuid) == 0 || CompareGUIDs(guid, gEfiSmbios3TableGuid) == 0) {
-            SMBIOS = table[i].VendorTable;
-            Print(UEFI_STR("[] Found SMBIOS table at 0x%p\n"), SMBIOS);
-        }
-        else if(CompareGUIDs(guid, gEfiAcpiTableGuid) == 0) {
-            ACPI = table[i].VendorTable;
-            Print(UEFI_STR("[] Found ACPI table at 0x%p\n"), ACPI);
-        }
-        else if(CompareGUIDs(guid, gEfiDtbTableGuid) == 0) {
-            DTB = table[i].VendorTable;
-            Print(UEFI_STR("[] Found DTB table at 0x%p\n"), DTB);
-        }
-    }
-
-    Status = gBS->GetMemoryMap(&MemoryMapSize, MemoryMap, &MapKey, &DescriptorSize, &DescriptorVersion);
+        Status = gBS->GetMemoryMap(&MemoryMapSize, MemoryMap, &MapKey, &DescriptorSize, &DescriptorVersion);
     if (Status == EFI_BUFFER_TOO_SMALL) {
         MemoryMap = AllocatePool(MemoryMapSize);
         Status = gBS->GetMemoryMap(&MemoryMapSize, MemoryMap, &MapKey, &DescriptorSize, &DescriptorVersion);
@@ -227,61 +212,89 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
                 break;
         }
     }
-    Print(UEFI_STR("\n%u MB usable memory found\n"), physPages * EFI_PAGE_SIZE / MB);
+    Print(UEFI_STR("\n[] Memory: %u MB usable\n"), physPages * EFI_PAGE_SIZE / MB);
 
     VIDEO_INFO videoV1 = {0};
     VIDEO_BOOT video = {0};
     GetVideoInfo(&videoV1, &video);
 
+    EFI_CONFIGURATION_TABLE *table = SystemTable->ConfigurationTable;
+    for(int i = 0; i < SystemTable->NumberOfTableEntries; ++i) {
+        EFI_GUID guid = table[i].VendorGuid;
+        if(CompareGUIDs(guid, gEfiSmbiosTableGuid) == 0 || CompareGUIDs(guid, gEfiSmbios3TableGuid) == 0) {
+            SMBIOS = table[i].VendorTable;
+            Print(UEFI_STR("[] SMBIOS at 0x%p\n"), SMBIOS);
+        }
+        else if(CompareGUIDs(guid, gEfiAcpiTableGuid) == 0) {
+            ACPI = table[i].VendorTable;
+            Print(UEFI_STR("[] ACPI RSDP at 0x%p\n"), ACPI);
+        }
+        else if(CompareGUIDs(guid, gEfiDtbTableGuid) == 0) {
+            DTB = table[i].VendorTable;
+            Print(UEFI_STR("[] DTB at 0x%p\n"), DTB);
+        }
+    }
+
+    if(DTB == 0 && ACPI != 0) {
+        DTBLength = BuildDTBFromACPI(ACPI, &DTB);
+    }
+    FdtDump(DTB);
+
     LoadDrivers(ImageHandle);
-    
     Status = LoadKernel(&KernelBuffer, &KernelEntry, &KernelSize);
     if (EFI_ERROR(Status))
         return Status;
 
-    BOOT_ARGS BootArgs;
-    SetMem(&BootArgs, sizeof(BootArgs), 0);
-    BootArgs.Version = 2;
-    BootArgs.EFIMode = 64;
-    BootArgs.Flags = kBootArgsFlagHiDPI;
-    AsciiStrCpyS(BootArgs.CommandLine, 1024, "-v -s");
-    BootArgs.VideoV1 = videoV1;
-    BootArgs.DeviceTree = 0;
-    BootArgs.DeviceTreeLength = 0;
-    BootArgs.kaddr = KERNEL_LOAD_ADDRESS;
-    BootArgs.ksize = KernelSize;
-    BootArgs.kslide = 0;
-    BootArgs.efiRuntimeServicesPageStart = (UINT32)(SystemTable->RuntimeServices);
+    BOOT_ARGS *BootArgs = (BOOT_ARGS *)(ARGS_ADDR - ((EFI_SIZE_TO_PAGES(sizeof(BOOT_ARGS))+1)*EFI_PAGE_SIZE));
+    Status = gBS->AllocatePages(AllocateAnyPages, EfiLoaderData,
+        EFI_SIZE_TO_PAGES(sizeof(BOOT_ARGS)), (EFI_PHYSICAL_ADDRESS *)BootArgs);
+    if(EFI_ERROR(Status)) {
+        Print(UEFI_STR("!! Failed to alloc memory for Boot Args: %r\n"), Status);
+        return Status;
+    }
+    SetMem(BootArgs, sizeof(BOOT_ARGS), 0);
+
+    BootArgs->Version = 2;
+    BootArgs->EFIMode = 64;
+    BootArgs->Flags = kBootArgsFlagHiDPI;
+    AsciiStrCpyS(BootArgs->CommandLine, 1024, "-v -s");
+    BootArgs->VideoV1 = videoV1;
+    BootArgs->DeviceTree = (UINT32)DTB;
+    BootArgs->DeviceTreeLength = DTBLength;
+    BootArgs->kaddr = KERNEL_LOAD_ADDRESS;
+    BootArgs->ksize = KernelSize;
+    BootArgs->kslide = 0;
+    BootArgs->efiRuntimeServicesPageStart = (UINT32)(SystemTable->RuntimeServices);
     UINT32 size = SystemTable->RuntimeServices->Hdr.HeaderSize - sizeof(EFI_TABLE_HEADER);
     UINT32 pages = size / EFI_PAGE_SIZE + 1;
-    BootArgs.efiRuntimeServicesPageCount = pages;
-    BootArgs.efiRuntimeServicesVirtualPageStart = (UINT64)(SystemTable->RuntimeServices);
-    BootArgs.efiSystemTable = (UINT32)SystemTable;
-    BootArgs.perfDataStart = 0;
-    BootArgs.perfDataSize = 0;
-    BootArgs.keystoreDataStart = 0;
-    BootArgs.keystoreDataSize = 0;
-    BootArgs.bootMemStart = 0; // is this the addr of this loader? of bootservices?
-    BootArgs.bootMemSize = 0;
-    BootArgs.Video = video;
+    BootArgs->efiRuntimeServicesPageCount = pages;
+    BootArgs->efiRuntimeServicesVirtualPageStart = (UINT64)(SystemTable->RuntimeServices);
+    BootArgs->efiSystemTable = (UINT32)SystemTable;
+    BootArgs->perfDataStart = 0;
+    BootArgs->perfDataSize = 0;
+    BootArgs->keystoreDataStart = 0;
+    BootArgs->keystoreDataSize = 0;
+    BootArgs->bootMemStart = 0; // is this the addr of this loader? of bootservices?
+    BootArgs->bootMemSize = 0;
+    BootArgs->Video = video;
 
-    // BootArgs.FSBFreq = no idea what it should be
-    // BootArgs.pciConfigSpaceBaseAddr = 
-    // BootArgs.pciConfigSpaceStartBusNumber = 
-    // BootArgs.pciConfigSpaceEndBusNumber =
-    // BootArgs.csrActiveConfig = 
-    // BootArgs.csrCapabilities =
-    // BootArgs.boot_smc_plimit =
-    // BootArgs.bootProgressMeterStart =
-    // BootArgs.bootProgressMeterEnd =    
-    // BootArgs.APFSDataStart =
-    // BootArgs.APFSDataSize =
+    // BootArgs->FSBFreq = no idea what it should be
+    // BootArgs->pciConfigSpaceBaseAddr = 
+    // BootArgs->pciConfigSpaceStartBusNumber = 
+    // BootArgs->pciConfigSpaceEndBusNumber =
+    // BootArgs->csrActiveConfig = 
+    // BootArgs->csrCapabilities =
+    // BootArgs->boot_smc_plimit =
+    // BootArgs->bootProgressMeterStart =
+    // BootArgs->bootProgressMeterEnd =    
+    // BootArgs->APFSDataStart =
+    // BootArgs->APFSDataSize =
 
-    BootArgs.MemoryMap = (UINT32)MemoryMap;
-    BootArgs.MemoryMapSize = MemoryMapSize;
-    BootArgs.MemoryMapDescriptorSize = DescriptorSize;
-    BootArgs.MemoryMapDescriptorVersion = DescriptorVersion;
-    BootArgs.physMemSize = physPages * EFI_PAGE_SIZE; // convert to bytes
+    BootArgs->MemoryMap = (UINT32)MemoryMap;
+    BootArgs->MemoryMapSize = MemoryMapSize;
+    BootArgs->MemoryMapDescriptorSize = DescriptorSize;
+    BootArgs->MemoryMapDescriptorVersion = DescriptorVersion;
+    BootArgs->physMemSize = physPages * EFI_PAGE_SIZE; // convert to bytes
 
     Print(UEFI_STR("\nStarting kernel at 0x%lx\n"), KernelEntry);
     gBS->ExitBootServices(ImageHandle, MapKey);
