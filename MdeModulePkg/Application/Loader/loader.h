@@ -153,9 +153,7 @@ FDT_HDR *FdtCreateEmpty(VOID);
 EFI_STATUS FdtCreateNode(FDT_HDR *hdr, CHAR8 *ParentPath, CHAR8 *Name);
 EFI_STATUS FdtSetProperty(FDT_HDR *hdr, CHAR8 *NodePath, CHAR8 *Name, VOID *Data, UINT32 Len);
 UINT8 *FdtGetProperty(FDT_HDR *hdr, UINT8 *NodePtr, CHAR8 *Name, UINT32 *OutLen);
-EFI_STATUS FdtDeleteProperty(FDT_HDR *hdr, CHAR8 *NodePath, CHAR8 *Name);
 UINT8 *FdtFindNode(FDT_HDR *hdr, CHAR8 *Path);
-EFI_STATUS FdtDeleteNode(FDT_HDR *hdr, CHAR8 *Path);
 VOID FdtDump(FDT_HDR *hdr);
 
 #endif // __LOADER_H

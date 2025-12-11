@@ -146,12 +146,10 @@ typedef struct {
 
 UINTN parseFADT(ACPI_FADT *fadt, VOID *DTB)
 {
-    Print(UEFI_STR("DTB at %p\n"), DTB);
-    Print(UEFI_STR("create node: %r\n"), FdtCreateNode(DTB, "/", "firmware"));
-    // FdtCreateNode(DTB, "firmware", "acpi");
-    // UINTN addr = (UINTN)fadt;
-    // FdtSetProperty(DTB, "firmware/acpi", "FADT", &addr, sizeof(addr));
-    FdtDump(DTB);
+    FdtCreateNode(DTB, "/", "firmware");
+    FdtCreateNode(DTB, "/firmware", "acpi");
+    UINTN addr = (UINTN)fadt;
+    FdtSetProperty(DTB, "/firmware/acpi", "FADT", &addr, sizeof(addr));
     return 0;
 }
 

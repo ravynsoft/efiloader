@@ -43,7 +43,7 @@ EFI_STATUS GetVideoInfo(VIDEO_INFO *v1, VIDEO_BOOT *v)
 
     EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *mode = GOP->Mode;
     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = mode->Info;
-    Print(UEFI_STR("[] Framebuffer: %dx%dx32 %d MB @0x%lx\n"),
+    Print(UEFI_STR("[] Framebuffer: %dx%dx32 %d MB at 0x%lx\n"),
         info->HorizontalResolution, info->VerticalResolution,
         mode->FrameBufferSize / MB, mode->FrameBufferBase);
 

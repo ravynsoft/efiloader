@@ -67,9 +67,11 @@ UINT8 *FdtFindNode(FDT_HDR *hdr, CHAR8 *Path)
     CHAR8 segment[128];
     CHAR8 *p = Path + 1;
 
-    // Extract first path component
+    // ptr is beginning of struct block
+    // p is char after leading / in path (\0 for root path)
+
     while(1) {
-        // Get next segment
+        // Get next path segment
         UINTN idx = 0;
         while(*p && *p != '/' && idx < sizeof(segment)-1)
             segment[idx++] = *p++;
@@ -92,14 +94,14 @@ UINT8 *FdtFindNode(FDT_HDR *hdr, CHAR8 *Path)
                     // Move ptr past node name
                     ptr += namelen + 1;
                     // Align to 4 bytes
-                    ptr = (UINT8*)ALIGN_POINTER(ptr, 4);
+                    ptr = (UINT8*)ALIGN_POINTER(ptr+3, 4);
                     found = TRUE;
                     break;
                 } else {
                     // skip this node (depth traversal)
                     UINT32 depth = 1;
                     ptr += namelen + 1;
-                    ptr = (UINT8*)ALIGN_POINTER(ptr, 4);
+                    ptr = (UINT8*)ALIGN_POINTER(ptr+3, 4);
                     while(depth) {
                         UINT32 nt = FdtToken(ptr);
                         ptr += 4;
@@ -107,24 +109,23 @@ UINT8 *FdtFindNode(FDT_HDR *hdr, CHAR8 *Path)
                         if(nt == FDT_BEGIN_NODE) {
                             CHAR8 *dummy = (CHAR8*)ptr;
                             ptr += AsciiStrLen(dummy) + 1;
-                            ptr = (UINT8*)ALIGN_POINTER(ptr, 4);
+                            ptr = (UINT8*)ALIGN_POINTER(ptr+3, 4);
                             depth++;
+                            return dummy;
                         } else if(nt == FDT_END_NODE) {
                             depth--;
                         } else if(nt == FDT_PROP) {
                             UINT32 len = FdtReadU32(ptr);
                             ptr += 8 + len;
-                            ptr = (UINT8*)ALIGN_POINTER(ptr, 4);
+                            ptr = (UINT8*)ALIGN_POINTER(ptr+3, 4);
                         } else if(nt == FDT_END) {
                             return NULL;
                         }
                     }
                 }
-            }
-            else if(tok == FDT_END) {
+            } else if(tok == FDT_END) {
                 return NULL;
             } else {
-                Print(UEFI_STR("!! Unknown token 0x%x\n"), tok);
                 return NULL;
             }
         }
@@ -157,12 +158,12 @@ UINT8 *FdtGetProperty(FDT_HDR *hdr, UINT8 *NodePtr, CHAR8 *Name, UINT32 *OutLen)
             }
 
             ptr += 8 + len;
-            ptr = (UINT8*)ALIGN_POINTER(ptr, 4);
+            ptr = (UINT8*)ALIGN_POINTER(ptr+3, 4);
         }
         else if(tok == FDT_BEGIN_NODE) {
             CHAR8 *n = (CHAR8*)ptr;
             ptr += AsciiStrLen(n) + 1;
-            ptr = (UINT8*)ALIGN_POINTER(ptr, 4);
+            ptr = (UINT8*)ALIGN_POINTER(ptr+3, 4);
         }
         else if(tok == FDT_END_NODE) {
             return NULL;
@@ -187,10 +188,15 @@ EFI_STATUS FdtSetProperty(FDT_HDR *hdr, CHAR8 *NodePath, CHAR8 *Name, VOID *Data
         return EFI_SUCCESS;
     }
 
-    // Creating (append before END_NODE)
+    // append before END_NODE
+    UINT32 off_dt_strings = SwapBytes32(hdr->off_dt_strings);
+    UINT32 size_dt_strings = SwapBytes32(hdr->size_dt_strings);
     UINT8 *ptr = node;
-    while(FdtToken(ptr) != FDT_END_NODE)
+    while(FdtToken(ptr) != FDT_END_NODE) {
         ptr += 4;
+        if(ptr > (void *)((UINTN)hdr + off_dt_strings))
+            return EFI_OUT_OF_RESOURCES;
+    }
 
     // Insert:
     //   FDT_PROP
@@ -198,12 +204,9 @@ EFI_STATUS FdtSetProperty(FDT_HDR *hdr, CHAR8 *NodePath, CHAR8 *Name, VOID *Data
     //   nameoff (4)
     //   data[len]
 
-    UINT32 off_dt_strings = SwapBytes32(hdr->off_dt_strings);
-    UINT32 size_dt_strings = SwapBytes32(hdr->size_dt_strings);
-
     // Find name in string table or append
     CHAR8 *strblk = (CHAR8*)hdr + off_dt_strings;
-    UINT32 nameoff = 0xFFFFFFFF;
+    UINT32 nameoff = size_dt_strings;
 
     // scan for existing
     UINT32 p = 0;
@@ -215,13 +218,12 @@ EFI_STATUS FdtSetProperty(FDT_HDR *hdr, CHAR8 *NodePath, CHAR8 *Name, VOID *Data
         p += AsciiStrSize(strblk + p);
     }
 
-    if(nameoff == 0xFFFFFFFF) {
-        // append
-        CopyMem(strblk + size_dt_strings, Name, AsciiStrSize(Name));
-        nameoff = size_dt_strings;
-        size_dt_strings += AsciiStrSize(Name);
-
+    UINT32 namesize = AsciiStrSize(Name);
+    CopyMem(strblk + nameoff, Name, namesize);
+    if(nameoff == size_dt_strings) { // we appended
+        size_dt_strings += namesize;
         hdr->size_dt_strings = SwapBytes32(size_dt_strings);
+        hdr->totalsize = SwapBytes32(SwapBytes32(hdr->totalsize) + namesize);
     }
 
     // Now append PROP token
@@ -242,34 +244,8 @@ EFI_STATUS FdtSetProperty(FDT_HDR *hdr, CHAR8 *NodePath, CHAR8 *Name, VOID *Data
     // align 4
     UINT32 new_tot = SwapBytes32(hdr->totalsize) + propSize;
     hdr->totalsize = SwapBytes32(new_tot);
-
-    return EFI_SUCCESS;
-}
-
-EFI_STATUS FdtDeleteProperty(FDT_HDR *hdr, CHAR8 *NodePath, CHAR8 *Name)
-{
-    UINT8 *node = FdtFindNode(hdr, NodePath);
-    if(!node)
-        return EFI_NOT_FOUND;
-
-    UINT32 plen;
-    UINT8 *prop = FdtGetProperty(hdr, node, Name, &plen);
-    if(!prop)
-        return EFI_NOT_FOUND;
-
-    UINT8 *tokPtr = prop - 8;  // back to PROP token
-    UINT8 *after  = prop + plen;
-    after = (UINT8*)ALIGN_POINTER(after, 4);
-
-    UINT32 removeSize = after - tokPtr;
-
-    UINT8 *end = (UINT8*)hdr + SwapBytes32(hdr->totalsize);
-    UINTN tail = end - after;
-
-    CopyMem(tokPtr, after, tail);
-
-    UINT32 newtot = SwapBytes32(hdr->totalsize) - removeSize;
-    hdr->totalsize = SwapBytes32(newtot);
+    hdr->size_dt_struct = SwapBytes32(SwapBytes32(hdr->size_dt_struct) + propSize);
+    hdr->off_dt_strings = SwapBytes32(SwapBytes32(hdr->off_dt_strings) + propSize);
 
     return EFI_SUCCESS;
 }
@@ -291,7 +267,7 @@ EFI_STATUS FdtCreateNode(FDT_HDR *hdr, CHAR8 *ParentPath, CHAR8 *Name)
         if(tok == FDT_BEGIN_NODE) {
             CHAR8 *n = (CHAR8*)ptr;
             ptr += AsciiStrLen(n) + 1;
-            ptr = (UINT8*)ALIGN_POINTER(ptr, 4);
+            ptr = (UINT8*)ALIGN_POINTER(ptr+3, 4);
             depth++;
         }
         else if(tok == FDT_END_NODE) {
@@ -300,7 +276,7 @@ EFI_STATUS FdtCreateNode(FDT_HDR *hdr, CHAR8 *ParentPath, CHAR8 *Name)
         else if(tok == FDT_PROP) {
             UINT32 len = FdtReadU32(ptr);
             ptr += 8 + len;
-            ptr = (UINT8*)ALIGN_POINTER(ptr, 4);
+            ptr = (UINT8*)ALIGN_POINTER(ptr+3, 4);
         }
     }
 
@@ -323,62 +299,16 @@ EFI_STATUS FdtCreateNode(FDT_HDR *hdr, CHAR8 *ParentPath, CHAR8 *Name)
 
     CopyMem(insert + newsize, insert, tail);
     FdtWriteU32(insert, FDT_BEGIN_NODE);
-    CopyMem(insert + 4, Name, namelen);
-    SetMem(insert + 4 + namelen, padded - namelen, 0);
-
-    FdtWriteU32(insert + 4 + padded, FDT_END_NODE);
+    insert += 4;
+    CopyMem(insert, Name, namelen);
+    insert += namelen;
+    SetMem(insert, padded - namelen, 0);
+    insert += (padded - namelen);
+    FdtWriteU32(insert, FDT_END_NODE);
 
     hdr->totalsize = SwapBytes32(SwapBytes32(hdr->totalsize) + newsize);
-
-    return EFI_SUCCESS;
-}
-
-EFI_STATUS FdtDeleteNode(FDT_HDR *hdr, CHAR8 *Path)
-{
-    UINT8 *node = FdtFindNode(hdr, Path);
-    if(!node)
-        return EFI_NOT_FOUND;
-
-    // node points at name after BEGIN_NODE
-
-    UINT8 *start = node - 8;   // BACK to BEGIN_NODE token
-    UINT8 *ptr   = node;
-
-    UINT32 depth = 1;
-
-    while(depth) {
-        UINT32 tok = FdtToken(ptr);
-        ptr += 4;
-
-        if(tok == FDT_BEGIN_NODE) {
-            CHAR8 *n = (CHAR8*)ptr;
-            ptr += AsciiStrLen(n) + 1;
-            ptr = (UINT8*)ALIGN_POINTER(ptr, 4);
-            depth++;
-        }
-        else if(tok == FDT_PROP) {
-            UINT32 len = FdtReadU32(ptr);
-            ptr += 8 + len;
-            ptr = (UINT8*)ALIGN_POINTER(ptr, 4);
-        }
-        else if(tok == FDT_END_NODE) {
-            depth--;
-        }
-        else if(tok == FDT_END) {
-            return EFI_PROTOCOL_ERROR;
-        }
-    }
-
-    UINT8 *end = ptr;  // after END_NODE
-
-    UINT8 *blobEnd = (UINT8*)hdr + SwapBytes32(hdr->totalsize);
-    UINTN tail = blobEnd - end;
-
-    CopyMem(start, end, tail);
-
-    UINT32 removed = end - start;
-    hdr->totalsize = SwapBytes32(SwapBytes32(hdr->totalsize) - removed);
-
+    hdr->size_dt_struct = SwapBytes32(SwapBytes32(hdr->size_dt_struct) + newsize);
+    hdr->off_dt_strings = SwapBytes32(SwapBytes32(hdr->off_dt_strings) + newsize);
     return EFI_SUCCESS;
 }
 
@@ -398,7 +328,9 @@ VOID FdtDump(FDT_HDR *hdr)
     UINT8 *end = struct_block + SwapBytes32(hdr->size_dt_struct);
     UINTN indent = 0;
 
-    Print(UEFI_STR(":: Flattened Device Tree\n"));
+    Print(UEFI_STR("\n:: Device Tree (0x%x, %d bytes)\n"),
+        hdr, SwapBytes32(hdr->totalsize));
+    
     while(ptr < end) {
         UINT32 token = FdtToken(ptr);
         ptr += 4;
@@ -415,8 +347,7 @@ VOID FdtDump(FDT_HDR *hdr)
             // Skip name + padding to next 4-byte boundary
             UINTN len = AsciiStrLen(name) + 1;
             ptr += len;
-            ptr = (UINT8*)ALIGN_POINTER(ptr, 4);
-
+            ptr = (UINT8*)(((UINTN)ptr + 4) & ~3); // pad to 4 byte alignment
             indent++;
             break;
         }
@@ -439,7 +370,7 @@ VOID FdtDump(FDT_HDR *hdr)
 
             // Skip property value (padded to 4-byte alignment)
             ptr += len;
-            ptr = (UINT8*)ALIGN_POINTER(ptr, 4);
+            ptr = (UINT8*)(((UINTN)ptr + 4) & ~3); // pad to 4 byte alignment
             break;
         }
 
