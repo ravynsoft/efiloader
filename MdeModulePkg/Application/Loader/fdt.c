@@ -21,6 +21,7 @@
  */
 
 #include "loader.h"
+#include <sys/cdefs.h>
 
 #define FDT_MAGIC       0xd00dfeed
 #define FDT_BEGIN_NODE  0x1
@@ -56,6 +57,13 @@ STATIC VOID FdtWriteU32(UINT8 *p, UINT32 v)
     CopyMem(p, &v, 4);
 }
 
+STATIC BOOLEAN _isprint(const UINT8 ch)
+{
+    if((ch >= 0x20 && ch < 0x7f))
+        return TRUE;
+    return FALSE;
+}
+
 // Find a node by path, e.g. "/soc/i2c@4000"
 UINT8 *FdtFindNode(FDT_HDR *hdr, CHAR8 *Path)
 {
@@ -73,7 +81,7 @@ UINT8 *FdtFindNode(FDT_HDR *hdr, CHAR8 *Path)
     // ptr is beginning of struct block
     // p is char after leading / in path (\0 for root path)
 
-    Print(L"FindNode Path=%a p=%p (%a)\n", Path, p, p);
+    // Print(L"FindNode Path=%a p=%p (%a)\n", Path, p, p);
     if(!*p) // this is the root node
         return ptr+8; // point after BEGIN_NODE and name;
 
@@ -87,7 +95,7 @@ UINT8 *FdtFindNode(FDT_HDR *hdr, CHAR8 *Path)
         segment[idx] = 0;
 
         if(*p == '/') p++; // skip path separator
-        Print(L"FindNode segment=%a p=%p (%a) depth=%d\n", segment, p, p, depth);
+        // Print(L"FindNode segment=%a p=%p (%a) depth=%d\n", segment, p, p, depth);
 
         // walk the tree depth first until we find it
         BOOLEAN found = FALSE;
@@ -101,7 +109,7 @@ UINT8 *FdtFindNode(FDT_HDR *hdr, CHAR8 *Path)
                     return NULL;
                 case FDT_END_NODE:
                     --depth;
-                    Print(L"END_NODE(depth=%d)\n", depth);
+                    // Print(L"END_NODE(depth=%d)\n", depth);
                     if(depth == 0)
                         return NULL;
                     break;
@@ -111,15 +119,15 @@ UINT8 *FdtFindNode(FDT_HDR *hdr, CHAR8 *Path)
                     if(AsciiStrCmp(ptr, segment) == 0)
                         found = TRUE;
                     namesize = (namesize + 3) & ~3; // align 4
-                    Print(L"BEGIN_NODE(depth=%d, size=0x%x, ptr=%p%a) ", depth, namesize, ptr+namesize,
-                        found ? " FOUND" : "");
+                    // Print(L"BEGIN_NODE(depth=%d, size=0x%x, ptr=%p%a) ", depth, namesize, ptr+namesize,
+                    //    found ? " FOUND" : "");
                     ptr += namesize; // skip to next token
                     break;
                 }
                 case FDT_PROP: {
                     UINT32 datasize = FdtReadU32(ptr);
                     datasize = (datasize + 8 + 3) & ~3; // align 4
-                    Print(L"PROP(size=0x%x, ptr=%p) ", datasize, ptr+datasize);
+                    // Print(L"PROP(size=0x%x, ptr=%p) ", datasize, ptr+datasize);
                     ptr += datasize;
                     break;
                 }
@@ -127,7 +135,7 @@ UINT8 *FdtFindNode(FDT_HDR *hdr, CHAR8 *Path)
                     Print(UEFI_STR("Unknown token %x at %p\n"), tok, ptr);
             }
         }
-        Print(L"\n");
+        // Print(L"\n");
 
         if(!found)
             return NULL;
@@ -196,7 +204,7 @@ UINT8 *_fastForward(UINT8 *ptr)
             case FDT_PROP: {
                 UINT32 datasize = FdtReadU32(ptr);
                 datasize = (datasize + 8 + 3) & ~3; // align 4
-                Print(L"PROP(size=0x%x, ptr=%p) ", datasize, ptr+datasize);
+                // Print(L"PROP(size=0x%x, ptr=%p) ", datasize, ptr+datasize);
                 ptr += datasize;
                 break;
             }
@@ -305,15 +313,13 @@ EFI_STATUS FdtCreateNode(FDT_HDR *hdr, CHAR8 *ParentPath, CHAR8 *Name)
     // Find END_NODE of the parent
     UINT8 *ptr = parent;
     UINT32 tok;
-    Print(UEFI_STR("Finding END_NODE of parent %p\n"), parent);
+    // Print(UEFI_STR("Finding END_NODE of parent %p\n"), parent);
     while((tok = FdtReadU32(ptr)) != FDT_END_NODE) {
         ptr += 4;
 
         // if we have child nodes, we need to skip over them
-        if(tok == FDT_BEGIN_NODE) {
-            Print(L"fast fwd\n");
+        if(tok == FDT_BEGIN_NODE)
             ptr = _fastForward(ptr);
-        }
         if(ptr > (CHAR8 *)((UINTN)hdr + off_dt_strings))
             return EFI_OUT_OF_RESOURCES;
     }
@@ -321,7 +327,7 @@ EFI_STATUS FdtCreateNode(FDT_HDR *hdr, CHAR8 *ParentPath, CHAR8 *Name)
     if(tok != FDT_END_NODE)
         return EFI_NOT_FOUND;
 
-    Print(UEFI_STR("Found at %p\n"), ptr);
+    // Print(UEFI_STR("Found at %p\n"), ptr);
 
     // BEGIN_NODE, name\0 (aligned), END_NODE
     UINT32 namelen = AsciiStrSize(Name);
@@ -338,7 +344,7 @@ EFI_STATUS FdtCreateNode(FDT_HDR *hdr, CHAR8 *ParentPath, CHAR8 *Name)
     UINTN tail = end - insert;
 
     // now shift everything forward and insert the node
-    Print(UEFI_STR("insert %p newsize %d end %p tail %d\n"), insert, newsize, end, tail);
+    // Print(UEFI_STR("insert %p newsize %d end %p tail %d\n"), insert, newsize, end, tail);
     CopyMem(insert + newsize, insert, tail);
     FdtWriteU32(insert, FDT_BEGIN_NODE);
     insert += 4;
@@ -387,9 +393,8 @@ VOID FdtDump(FDT_HDR *hdr)
             Print(UEFI_STR("%a/ {\n"), name);
 
             // Skip name + padding to next 4-byte boundary
-            UINTN len = AsciiStrSize(name);
-            ptr += len + 4;
-            ptr = (UINT8*)ALIGN_POINTER(ptr, 4);
+            UINTN len = (AsciiStrSize(name) + 3) & ~3;
+            ptr += len;
             indent++;
             break;
         }
@@ -408,11 +413,21 @@ VOID FdtDump(FDT_HDR *hdr)
             ptr += 4;
             CHAR8 *propname = (CHAR8*)strings_block + nameoff;
             PrintIndent(indent);
-            Print(UEFI_STR("%a (len=%u)\n"), propname, len);
+            Print(UEFI_STR("%a (len=%u) = "), propname, len);
+
+            if(len == 4)
+                Print(UEFI_STR("<0x%08x>\n"), *(UINT32 *)ptr);
+            else if(len == 8)
+                Print(UEFI_STR("<0x%016lx>\n"), *(UINT64 *)ptr);
+            else {
+                UINT8 *p = ptr;
+                while(p < ptr+len)
+                    Print(_isprint(*p) ? L"%c" : L" %02x ", *p++);
+                Print(L"\n");
+            }
 
             // Skip property value (padded to 4-byte alignment)
-            ptr += len + 4;
-            ptr = (UINT8*)ALIGN_POINTER(ptr, 4);
+            ptr += (len + 3) & ~3;
             break;
         }
 
@@ -430,7 +445,6 @@ VOID FdtDump(FDT_HDR *hdr)
             return;
         }
     }
-
     Print(UEFI_STR("!! Reached end of structure block without FDT_END token\n"));
 }
 
