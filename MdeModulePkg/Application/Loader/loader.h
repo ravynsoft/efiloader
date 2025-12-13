@@ -29,6 +29,7 @@
 #include <Library/MemoryAllocationLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/FileHandleLib.h>
+#include <Library/PrintLib.h>
 #include <Protocol/SimpleFileSystem.h>
 #include <Guid/SmBios.h>
 #include <Guid/Acpi.h>
@@ -147,7 +148,7 @@ UINT64 readULEB128(const UINT8 **p, const UINT8 *end);
 INT64 readSLEB128(const UINT8 **p, const UINT8 *end);
 int mapSegments(struct mach_header_64 *mh, UINTN *entry, EFI_FILE_HANDLE KernelFile);
 
-UINTN BuildDTBFromACPI(VOID *ACPI, VOID **DTB);
+UINTN BuildDTBFromACPI(VOID *ACPI, VOID *DTB);
 
 FDT_HDR *FdtCreateEmpty(VOID);
 EFI_STATUS FdtCreateNode(FDT_HDR *hdr, CHAR8 *ParentPath, CHAR8 *Name);

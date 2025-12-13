@@ -65,28 +65,24 @@ typedef struct {
     UINT8 reserved[3];
 } ACPI_RSDP;
 
-typedef struct {
-    UINT8 signature[4];
-    UINT32 length;
-    UINT8 revision;
-    UINT8 checksum;
-    UINT8 OEMID[6];
-    UINT8 OEMTableID[8];
-    UINT32 OEMRevision;
-    UINT32 creator;
+
+#define SDT_HEADER \
+    UINT8 signature[4]; \
+    UINT32 length; \
+    UINT8 revision; \
+    UINT8 checksum; \
+    UINT8 OEMID[6]; \
+    UINT8 OEMTableID[8]; \
+    UINT32 OEMRevision; \
+    UINT32 creator; \
     UINT32 creatorRevision;
+
+typedef struct {
+    SDT_HEADER
 } ACPI_SDT_HEADER;
 
 typedef struct {
-    UINT8 signature[4];
-    UINT32 length;
-    UINT8 major;
-    UINT8 checksum;
-    UINT8 OEMID[6];
-    UINT8 OEMTableID[8];
-    UINT32 OEMRevision;
-    UINT32 creator;
-    UINT32 creatorRevision;
+    SDT_HEADER
     UINT32 FIRMWARE_CTRL;
     UINT32 DSDT;
     UINT8 _resv0;
@@ -144,23 +140,26 @@ typedef struct {
     UINT64 hypervisorID;
 } ACPI_FADT;
 
+typedef struct {
+    SDT_HEADER
+    UINT32 LAPICAddr;
+    UINT32 Flags;
+} ACPI_APIC;
+
 UINTN parseFADT(ACPI_FADT *fadt, VOID *DTB)
 {
-    FdtCreateNode(DTB, "/", "firmware");
-    FdtCreateNode(DTB, "/firmware", "acpi");
-    UINTN addr = (UINTN)fadt;
-    FdtSetProperty(DTB, "/firmware/acpi", "FADT", &addr, sizeof(addr));
     return 0;
 }
 
-UINTN BuildDTBFromACPI(VOID *ACPI, VOID **DTB)
+UINTN parseAPIC(ACPI_APIC *apic, VOID *DTB)
+{
+    return 0;
+}
+
+UINTN BuildDTBFromACPI(VOID *ACPI, VOID *DTB)
 {
     ACPI_RSDP *rsdp = ACPI;
     ACPI_SDT_HEADER *sdt = (ACPI_SDT_HEADER *)(rsdp->XSDT ? rsdp->XSDT : rsdp->RSDT);
-
-    *DTB = FdtCreateEmpty();
-    if(!(*DTB))
-        return EFI_OUT_OF_RESOURCES;
 
     Print(UEFI_STR("    %c%c%c%c %d bytes at 0x%lx\n"), sdt->signature[0], 
         sdt->signature[1], sdt->signature[2], sdt->signature[3], sdt->length, sdt);
@@ -173,12 +172,21 @@ UINTN BuildDTBFromACPI(VOID *ACPI, VOID **DTB)
         ACPI_SDT_HEADER *h = (ACPI_SDT_HEADER *)(*entry);
         Print(UEFI_STR("%c%c%c%c, %d bytes]\n"), h->signature[0],
             h->signature[1], h->signature[2], h->signature[3], h->length);
+
+        // FdtCreateNode(DTB, "/firmware/acpi", (char *)(h->signature));
+        // UINTN addr = (UINTN)apic;
+        // CHAR8 buffer[128] = { "/firmware/acpi/" };
+        // AsciiStrCat(buffer, h->signature);
+        // FdtSetProperty(DTB, buffer, "physaddr", &addr, sizeof(addr));
+
         if(!CompareMem(h->signature, ACPI_TID_FACP, 4))
-            parseFADT(h, *DTB);
+            parseFADT(h, DTB);
+        else if(!CompareMem(h->signature, ACPI_TID_APIC, 4))
+            parseAPIC(h, DTB);
         entry++; // +4 bytes
         if(entsize == 8)
             entry++;
     }
 
-    return ((FDT_HDR *)(*DTB))->totalsize;
+    return ((FDT_HDR *)DTB)->totalsize;
 }

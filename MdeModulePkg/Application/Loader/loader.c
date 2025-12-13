@@ -172,6 +172,42 @@ INT32 CompareGUIDs(EFI_GUID guid1, EFI_GUID guid2)
     return 0;
 }
 
+#define SET_BUFFER(x) CopyMem(buffer, x, AsciiStrSize(x))
+FDT_HDR *InitDTB(EFI_SYSTEM_TABLE *SystemTable)
+{
+    UINT32 v;
+    UINT8 buffer[256];
+
+    FDT_HDR *DTB = FdtCreateEmpty();
+    if(!DTB)
+        return NULL;
+
+    FdtCreateNode(DTB, "/", "cpus");
+    FdtCreateNode(DTB, "/", "memory");
+    FdtCreateNode(DTB, "/", "chosen");
+
+    FdtCreateNode(DTB, "/", "efi");
+    FdtSetProperty(DTB, "/efi", "firmware-revision", &SystemTable->FirmwareRevision, 4);
+    FdtSetProperty(DTB, "/efi", "firmware-vendor", SystemTable->FirmwareVendor, StrSize(SystemTable->FirmwareVendor));
+    SET_BUFFER("EFI64");
+    FdtSetProperty(DTB, "/efi", "firmware-abi", buffer, AsciiStrSize((char *)buffer));
+
+    FdtCreateNode(DTB, "/efi", "kernel-compatibility");
+    SET_BUFFER("x86_64");
+    FdtSetProperty(DTB, "/efi/kernel-compatibility", "kernel-compatibility", buffer, AsciiStrSize((char *)buffer));
+
+    FdtCreateNode(DTB, "/efi", "runtime-services");
+    SET_BUFFER("runtime-services");
+    FdtSetProperty(DTB, "/efi/runtime-services", "name", buffer, AsciiStrSize((char *)buffer));
+    FdtSetProperty(DTB, "/efi/runtime-services", "table", (UINTN *)(SystemTable->RuntimeServices), sizeof(UINTN));
+
+    FdtCreateNode(DTB, "/efi/runtime-services", "configuration-table");
+    SET_BUFFER("configuration-table");
+    FdtSetProperty(DTB, "/efi/runtime-services/configuration-table", "name", buffer, AsciiStrSize((char *)buffer));
+
+    return DTB;
+}
+
 EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
 {
     EFI_STATUS Status;
@@ -217,16 +253,27 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     VIDEO_INFO videoV1 = {0};
     VIDEO_BOOT video = {0};
     GetVideoInfo(&videoV1, &video);
+    DTB = InitDTB(SystemTable);
 
     EFI_CONFIGURATION_TABLE *table = SystemTable->ConfigurationTable;
+    CHAR8 buffer[128], buffer2[128];
     for(int i = 0; i < SystemTable->NumberOfTableEntries; ++i) {
         EFI_GUID guid = table[i].VendorGuid;
+        
+        // AsciiSPrint(buffer, sizeof(buffer), "%g", guid);
+        // FdtCreateNode(DTB, "/efi/runtime-services/configuration-table", buffer);
+        // AsciiSPrint(buffer2, sizeof(buffer), "/efi/runtime-services/configuration-table/%g", guid);
+        // FdtSetProperty(DTB, buffer2, "name", buffer, AsciiStrSize((char *)buffer));
+        // FdtSetProperty(DTB, buffer2, "table", table[i].VendorTable, sizeof(UINTN));
+        // FdtSetProperty(DTB, buffer2, "guid", (void *)&guid, sizeof(guid));
+    
         if(CompareGUIDs(guid, gEfiSmbiosTableGuid) == 0 || CompareGUIDs(guid, gEfiSmbios3TableGuid) == 0) {
             SMBIOS = table[i].VendorTable;
             Print(UEFI_STR("[] SMBIOS at 0x%p\n"), SMBIOS);
         }
         else if(CompareGUIDs(guid, gEfiAcpiTableGuid) == 0) {
             ACPI = table[i].VendorTable;
+            FdtSetProperty(DTB, buffer2, "alias", "ACPI_20", 8);
             Print(UEFI_STR("[] ACPI RSDP at 0x%p\n"), ACPI);
         }
         else if(CompareGUIDs(guid, gEfiDtbTableGuid) == 0) {
@@ -235,9 +282,8 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
         }
     }
 
-    if(DTB == 0 && ACPI != 0) {
-        DTBLength = BuildDTBFromACPI(ACPI, &DTB);
-    }
+    if(ACPI != 0)
+        DTBLength = BuildDTBFromACPI(ACPI, DTB);
     FdtDump(DTB);
 
     LoadDrivers(ImageHandle);
