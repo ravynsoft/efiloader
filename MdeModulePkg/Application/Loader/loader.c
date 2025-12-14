@@ -184,7 +184,14 @@ FDT_HDR *InitDTB(EFI_SYSTEM_TABLE *SystemTable)
 
     FdtCreateNode(DTB, "/", "cpus");
     FdtCreateNode(DTB, "/", "memory");
+    
     FdtCreateNode(DTB, "/", "chosen");
+    FdtCreateNode(DTB, "/chosen", "memory-map");
+    FdtCreateNode(DTB, "/chosen", "osenvironment");
+    FdtCreateNode(DTB, "/chosen", "ephemeral-storage");
+    FdtCreateNode(DTB, "/chosen", "use-recovery-securityd");
+    
+    FdtCreateNode(DTB, "/", "defaults");
 
     FdtCreateNode(DTB, "/", "efi");
     FdtSetProperty(DTB, "/efi", "firmware-revision", &SystemTable->FirmwareRevision, 4);
@@ -205,6 +212,11 @@ FDT_HDR *InitDTB(EFI_SYSTEM_TABLE *SystemTable)
     SET_BUFFER("configuration-table");
     FdtSetProperty(DTB, "/efi/runtime-services/configuration-table", "name", buffer, AsciiStrSize((char *)buffer));
 
+    UINT32 val = 0;
+    FdtCreateNode(DTB, "/efi", "platform");
+    FdtSetProperty(DTB, "/efi/platform", "apple-coprocessor-version", &val, 4);
+    FdtSetProperty(DTB, "/efi/platform", "boot-chime-on-last-boot", &val, 4);
+    
     return DTB;
 }
 
@@ -237,6 +249,8 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
         return Status;
     }
 
+    DTB = InitDTB(SystemTable);
+
     for(region = MemoryMap; region < ((UINT8 *)MemoryMap + MemoryMapSize); region += DescriptorSize) {
         switch(((EFI_MEMORY_DESCRIPTOR *)region)->Type) {
             case EfiConventionalMemory:
@@ -253,19 +267,18 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     VIDEO_INFO videoV1 = {0};
     VIDEO_BOOT video = {0};
     GetVideoInfo(&videoV1, &video);
-    DTB = InitDTB(SystemTable);
 
     EFI_CONFIGURATION_TABLE *table = SystemTable->ConfigurationTable;
     CHAR8 buffer[128], buffer2[128];
     for(int i = 0; i < SystemTable->NumberOfTableEntries; ++i) {
         EFI_GUID guid = table[i].VendorGuid;
         
-        // AsciiSPrint(buffer, sizeof(buffer), "%g", guid);
-        // FdtCreateNode(DTB, "/efi/runtime-services/configuration-table", buffer);
-        // AsciiSPrint(buffer2, sizeof(buffer), "/efi/runtime-services/configuration-table/%g", guid);
-        // FdtSetProperty(DTB, buffer2, "name", buffer, AsciiStrSize((char *)buffer));
-        // FdtSetProperty(DTB, buffer2, "table", table[i].VendorTable, sizeof(UINTN));
-        // FdtSetProperty(DTB, buffer2, "guid", (void *)&guid, sizeof(guid));
+        AsciiSPrint(buffer, sizeof(buffer), "%g", guid);
+        FdtCreateNode(DTB, "/efi/runtime-services/configuration-table", buffer);
+        AsciiSPrint(buffer2, sizeof(buffer), "/efi/runtime-services/configuration-table/%g", guid);
+        FdtSetProperty(DTB, buffer2, "name", buffer, AsciiStrSize((char *)buffer));
+        FdtSetProperty(DTB, buffer2, "table", table[i].VendorTable, sizeof(UINTN));
+        FdtSetProperty(DTB, buffer2, "guid", (void *)&guid, sizeof(guid));
     
         if(CompareGUIDs(guid, gEfiSmbiosTableGuid) == 0 || CompareGUIDs(guid, gEfiSmbios3TableGuid) == 0) {
             SMBIOS = table[i].VendorTable;

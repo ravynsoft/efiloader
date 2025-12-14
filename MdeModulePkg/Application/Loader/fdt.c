@@ -420,10 +420,19 @@ VOID FdtDump(FDT_HDR *hdr)
             else if(len == 8)
                 Print(UEFI_STR("<0x%016lx>\n"), *(UINT64 *)ptr);
             else {
+                Print(L"[");
                 UINT8 *p = ptr;
-                while(p < ptr+len)
-                    Print(_isprint(*p) ? L"%c" : L" %02x ", *p++);
-                Print(L"\n");
+                while(p < ptr+len) {
+                    Print(L"%c", _isprint(*p) ? *p : '.');
+                    ++p;
+                }
+                Print(L" [ ");
+                p = ptr;
+                while(p < ptr+len) {
+                    Print(L"%02x ", *p);
+                    ++p;
+                }
+                Print(L"]\n");
             }
 
             // Skip property value (padded to 4-byte alignment)

@@ -172,13 +172,6 @@ UINTN BuildDTBFromACPI(VOID *ACPI, VOID *DTB)
         ACPI_SDT_HEADER *h = (ACPI_SDT_HEADER *)(*entry);
         Print(UEFI_STR("%c%c%c%c, %d bytes]\n"), h->signature[0],
             h->signature[1], h->signature[2], h->signature[3], h->length);
-
-        // FdtCreateNode(DTB, "/firmware/acpi", (char *)(h->signature));
-        // UINTN addr = (UINTN)apic;
-        // CHAR8 buffer[128] = { "/firmware/acpi/" };
-        // AsciiStrCat(buffer, h->signature);
-        // FdtSetProperty(DTB, buffer, "physaddr", &addr, sizeof(addr));
-
         if(!CompareMem(h->signature, ACPI_TID_FACP, 4))
             parseFADT(h, DTB);
         else if(!CompareMem(h->signature, ACPI_TID_APIC, 4))
