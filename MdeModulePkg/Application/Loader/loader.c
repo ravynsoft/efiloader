@@ -31,6 +31,7 @@ EFI_GUID gEfiDtbTableGuid = {0xb1b621d5, 0xf19c, 0x41a5, \
 EFI_GUID gEfiAcpiTableGuid = EFI_ACPI_20_TABLE_GUID;
 EFI_GUID gEfiSmbios3TableGuid = SMBIOS3_TABLE_GUID;
 EFI_GUID gEfiSmbiosTableGuid = SMBIOS_TABLE_GUID;
+EFI_GUID gEfiRngProtocolGuid = EFI_RNG_PROTOCOL_GUID;
 
 EFI_STATUS GetVideoInfo(VIDEO_INFO *v1, VIDEO_BOOT *v)
 {
@@ -175,17 +176,27 @@ INT32 CompareGUIDs(EFI_GUID guid1, EFI_GUID guid2)
 #define SET_BUFFER(x) CopyMem(buffer, x, AsciiStrSize(x))
 FDT_HDR *InitDTB(EFI_SYSTEM_TABLE *SystemTable)
 {
+    EFI_STATUS Status;
     UINT32 v;
     UINT8 buffer[256];
+    UINT8 entropy[ENTROPY_SIZE];
+    EFI_RNG_PROTOCOL *RNG = 0;
 
     FDT_HDR *DTB = FdtCreateEmpty();
     if(!DTB)
         return NULL;
 
+    Status = gBS->LocateProtocol(&gEfiRngProtocolGuid, NULL, (VOID**)&RNG);
+    if(EFI_ERROR(Status))
+        Print(UEFI_STR("!! Failed to find entropy source: %r\n"), Status); // kernel will panic
+    else
+        RNG->GetRNG(RNG, NULL, ENTROPY_SIZE, entropy);
+
     FdtCreateNode(DTB, "/", "cpus");
     FdtCreateNode(DTB, "/", "memory");
     
     FdtCreateNode(DTB, "/", "chosen");
+    FdtSetProperty(DTB, "/chosen", "random-seed", entropy, ENTROPY_SIZE);
     FdtCreateNode(DTB, "/chosen", "memory-map");
     FdtCreateNode(DTB, "/chosen", "osenvironment");
     FdtCreateNode(DTB, "/chosen", "ephemeral-storage");
@@ -304,22 +315,16 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     if (EFI_ERROR(Status))
         return Status;
 
-    BOOT_ARGS *BootArgs = (BOOT_ARGS *)(ARGS_ADDR - ((EFI_SIZE_TO_PAGES(sizeof(BOOT_ARGS))+1)*EFI_PAGE_SIZE));
-    Status = gBS->AllocatePages(AllocateAnyPages, EfiLoaderData,
-        EFI_SIZE_TO_PAGES(sizeof(BOOT_ARGS)), (EFI_PHYSICAL_ADDRESS *)BootArgs);
-    if(EFI_ERROR(Status)) {
-        Print(UEFI_STR("!! Failed to alloc memory for Boot Args: %r\n"), Status);
-        return Status;
-    }
+    BOOT_ARGS *BootArgs = (BOOT_ARGS *)(ARGS_ADDR - (8*EFI_PAGE_SIZE));
     SetMem(BootArgs, sizeof(BOOT_ARGS), 0);
 
     BootArgs->Version = 2;
     BootArgs->EFIMode = 64;
     BootArgs->Flags = kBootArgsFlagHiDPI;
-    AsciiStrCpyS(BootArgs->CommandLine, 1024, "-v -s");
+    AsciiStrCpyS(BootArgs->CommandLine, 1024, "-v -s debug=1 diagnostic_api=1");
     BootArgs->VideoV1 = videoV1;
-    BootArgs->DeviceTree = (UINT32)DTB;
-    BootArgs->DeviceTreeLength = DTBLength;
+    BootArgs->DeviceTree = (UINTN)DTB + SwapBytes32((UINT32)((FDT_HDR *)DTB)->off_dt_struct) + 4; //skip node token
+    BootArgs->DeviceTreeLength = ((FDT_HDR *)DTB)->size_dt_struct;
     BootArgs->kaddr = KERNEL_LOAD_ADDRESS;
     BootArgs->ksize = KernelSize;
     BootArgs->kslide = 0;
@@ -363,7 +368,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
         "movq %0, %%rax\n"
         "movq %1, %%rdi\n"
         "jmpq *%%rdi\n"
-        : : "mr"(&BootArgs), "r"(KernelEntry) : "rax", "rdi"
+        : : "mr"(BootArgs), "r"(KernelEntry) : "rax", "rdi"
     );
 
     return EFI_SUCCESS;

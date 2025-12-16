@@ -31,6 +31,7 @@
 #include <Library/FileHandleLib.h>
 #include <Library/PrintLib.h>
 #include <Protocol/SimpleFileSystem.h>
+#include <Protocol/Rng.h>
 #include <Guid/SmBios.h>
 #include <Guid/Acpi.h>
 
@@ -42,11 +43,13 @@ extern EFI_GUID gEfiDtbTableGuid;
 extern EFI_GUID gEfiAcpiTableGuid;
 extern EFI_GUID gEfiSmbios3TableGuid;
 extern EFI_GUID gEfiSmbiosTableGuid;
+extern EFI_GUID gEfiRngProtocolGuid;
 
 #define UEFI_STR(s) ((CHAR16 *)u##s)
 #define GB (1024*1024*1024)
 #define MB (1024*1024)
 #define KB 1024
+#define ENTROPY_SIZE 64
 
 // Bitfields for boot_args->flags
 #define kBootArgsFlagRebootOnPanic      (1 << 0)
@@ -128,6 +131,7 @@ typedef struct {
 } BOOT_ARGS;
 extern char assert_boot_args_size_is_4096[sizeof(BOOT_ARGS) == 4096 ? 1 : -1];
 
+// this is the FDT v17 header, but xnu doesn't use it
 typedef struct {
     UINT32 magic;
     UINT32 totalsize;
@@ -140,6 +144,23 @@ typedef struct {
     UINT32 size_dt_strings;
     UINT32 size_dt_struct;
 } FDT_HDR;
+
+#define FDT_PROPNAME_MAX 32   // max length is 31 + null byte
+
+// a XNU FDT node
+typedef struct {
+    UINT32 nProp;
+    UINT32 nChildren;
+    /* properties[nProp] */
+    /* nodes[nChildren] */
+} FdtNode;
+
+// a XNU FDT property
+typedef struct {
+    CHAR8 name[FDT_PROPNAME_MAX];
+    UINT32 length; // size of following data, aligned(4)
+    /* data x length bytes */
+} FdtProperty;
 
 #define BIND_TYPE_THREADED_BIND 100
 #define BIND_TYPE_THREADED_REBASE 102
