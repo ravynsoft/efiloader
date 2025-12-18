@@ -23,12 +23,9 @@
 #include "loader.h"
 #include <sys/cdefs.h>
 
-#define FDT_MAGIC       0xd00dfeed
-#define FDT_BEGIN_NODE  0x1
-#define FDT_END_NODE    0x2
-#define FDT_PROP        0x3
-#define FDT_NOP         0x4
-#define FDT_END         0x9
+CHAR8 *_fastForward(CHAR8 *ptr);
+
+CHAR8* gEnd = 0;
 
 /* Static helper functions */
 STATIC VOID PrintIndent(UINTN level)
@@ -37,84 +34,117 @@ STATIC VOID PrintIndent(UINTN level)
         Print(UEFI_STR("  "));
 }
 
-STATIC UINT32 FdtReadU32(UINT8 *p)
+STATIC UINT32 FdtReadU32(CHAR8 *p)
 {
     UINT32 v;
     CopyMem(&v, p, 4);
-    return SwapBytes32(v);
+    return v; //SwapBytes32(v);
 }
 
-STATIC VOID FdtWriteU32(UINT8 *p, UINT32 v)
+STATIC VOID FdtWriteU32(CHAR8 *p, UINT32 v)
 {
-    v = SwapBytes32(v);
+    // v = SwapBytes32(v);
     CopyMem(p, &v, 4);
 }
 
-STATIC BOOLEAN _isprint(const UINT8 ch)
+STATIC BOOLEAN _isprint(const CHAR8 ch)
 {
     if((ch >= 0x20 && ch < 0x7f))
         return TRUE;
     return FALSE;
 }
 
-STATIC VOID dumpHex(UINT8 *addr, UINTN size, const CHAR8 *source)
+STATIC VOID dumpHex(CHAR8 *addr, UINTN size, const CHAR8 *source)
 {
+    int index = 0;
     Print(L"DUMPHEX %a %p %x", source, addr, size);
     for(int i = 0; i < size; ++i) {
         if(i == 0 || i % 16 == 0)
             Print(L"\n0x%08x: ", addr+i);
         Print(L"%02x ", addr[i]);
+        ++index;
+        if(index == 16) {
+            Print(L"\t");
+            for(int j = 15; j >= 0; --j) {
+                CHAR8 ch = *(addr+(i-j));
+                Print(L"%c", _isprint(ch) ? ch : '.');
+            }
+            index = 0;
+        }
     }
     Print(L"\n");
 }
 
-STATIC UINT8 *skipProperty(UINT8 *ptr)
+STATIC CHAR8 *skipProperty(CHAR8 *ptr)
 {
-    CHAR8 *name = ptr;
+    const CHAR8 *name = ptr;
     ptr += FDT_PROPNAME_MAX; // skip name
     UINT32 datasize = FdtReadU32(ptr);
     ptr += 4;
-    datasize = (datasize + 3) & ~3; // align 4
     // Print(L"skipProperty(size=0x%x, name=%a, ptr=%p)\n", datasize, name, ptr+datasize);
-    ptr += datasize;
+    return (CHAR8 *)(((UINTN)ptr + datasize + 3) & ~3);
+}
+
+STATIC CHAR8 *skipProperties(FdtNode *node)
+{
+    CHAR8 *ptr = (CHAR8 *)node + sizeof(node);
+    for(int i = 0; i < node->nProp; ++i) {
+        // Print(L"skipping %d of %d properties\n", i+1, node->nProp);
+        ptr = skipProperty(ptr);
+    }
+    return ptr;
+}
+
+/* Skip over a node and all its children 
+ * Call with: ptr at start of node
+ * Returns: new ptr -> next node
+ */
+CHAR8 *_fastForward(CHAR8 *ptr)
+{
+    // Print(L"fast forward (%p)\n", ptr);
+    FdtNode *cur = (FdtNode *)ptr;
+
+    ptr += sizeof(FdtNode); // skip node counts and point at first child
+    if(cur->nProp > 0)
+        ptr = skipProperties(cur);
+
+    // now iterate nodes. if none, we already point at next element
+    for(int i = 0; i < cur->nChildren; ++i) {
+        ptr = _fastForward(ptr);
+        cur = (FdtNode *)ptr;
+    }
 
     return ptr;
 }
 
 STATIC VOID incProps(VOID *node)
 {
-    FdtNode *n = (FdtNode *)(node - 8);
-    n->nProp++;
+    ((FdtNode *)node)->nProp++;
 }
 
 STATIC VOID incChildren(VOID *node)
 {
-    FdtNode *n = (FdtNode *)(node - 8);
-    n->nChildren++;
+    ((FdtNode *)node)->nChildren++;
 }
 
 // Find a node by path, e.g. "/soc/i2c@4000"
-UINT8 *FdtFindNode(FDT_HDR *hdr, CHAR8 *Path)
+CHAR8 *FdtFindNode(FdtNode *root, CHAR8 *Path)
 {
-    if(!hdr || !Path || Path[0] != '/')
+    if(!root || !Path || Path[0] != '/')
         return NULL;
-
-    UINT32 off_dt_struct = SwapBytes32(hdr->off_dt_struct);
-    UINT32 size_dt_struct = SwapBytes32(hdr->size_dt_struct);
-    UINT8 *ptr = (UINT8*)hdr + off_dt_struct;
-    UINT8 *end = ptr + size_dt_struct;
     
-    CHAR8 segment[128];
     CHAR8 *p = Path + 1;
+    if(!*p) // this is the root node
+        return (CHAR8 *)root;
 
-    // ptr is beginning of struct block
+    CHAR8 segment[128];
+    UINT32 depth = 0;
+
+    // ptr is beginning of nodes block
     // p is char after leading / in path (\0 for root path)
 
-    // Print(L"FindNode Path=%a p=%p (%a)\n", Path, p, FdtGetProperty(hdr, ptr + 4, "name", NULL));
-    if(!*p) // this is the root node
-        return ptr+12; // point after BEGIN_NODE and counts;
-
-    UINT32 depth = 0; // root node
+    // Print(L"FindNode Path=%a\n", Path);
+    FdtNode *cur = root;
     while(1) {
         UINT32 idx = 0;
         while(*p && *p != '/') { // find end of segment
@@ -127,372 +157,148 @@ UINT8 *FdtFindNode(FDT_HDR *hdr, CHAR8 *Path)
             p++; // skip path separator
         // Print(L"FindNode segment=%a p=%a depth=%d\n", segment, p, depth);
 
-        // walk the tree depth first until we find it
+        // walk the tree until we find it
+        CHAR8 *ptr;
         BOOLEAN found = FALSE;
-        while(ptr < end && !found) {
-            UINT32 tok = FdtReadU32(ptr);
-            ptr += 4;
-            switch(tok) {
-                case FDT_NOP:
-                    break;
-                case FDT_END:
-                    return NULL;
-                case FDT_END_NODE:
-                    --depth;
-                    // Print(L"END_NODE(depth=%d)\n", depth);
-                    if(depth == 0)
-                        return NULL;
-                    break;
-                case FDT_BEGIN_NODE: {
-                    ++depth;
-                    // Print(L"BEGIN_NODE(depth=%d, ptr=%p)\n", depth, ptr);
-                    ptr += 8; // skip counts
-                    CHAR8 *name = FdtGetProperty(hdr, ptr, "name", NULL);
-                    // Print(L"name = %a\n", name);
-                    if(AsciiStrCmp(name, segment) == 0) {
-                        found = TRUE;
-                        // Print(L"FOUND\n");
-                    }
-                    break;
-                }
-                case FDT_PROP: {
-                    ptr = skipProperty(ptr);
-                    break;
-                }
-                default:
-                    Print(UEFI_STR("!! FdtFindNode: Unknown token %x at %p\n"), tok, ptr);
+        while(!found) {
+            CHAR8 *name = FdtGetProperty(root, (CHAR8 *)cur, "name", NULL);
+            // Print(L"cur->name = %a\n", name);
+            if(AsciiStrCmp(name, segment) == 0) {
+                found = TRUE;
+                ptr = (CHAR8 *)cur;
+                // Print(L"FOUND on cur, ptr=%p\n", ptr);
+                break;
             }
+            ptr = skipProperties(cur);
+            for(int i = 0; i < cur->nChildren; ++i) {
+                name = FdtGetProperty(root, ptr, "name", NULL);
+                // Print(L"ptr->name = %a\n", name);
+                if(AsciiStrCmp(name, segment) == 0) {
+                    found = TRUE;
+                    // Print(L"FOUND in children, ptr=%p\n", ptr);
+                    break;
+                }
+                ptr = _fastForward((CHAR8 *)ptr);
+            }
+            cur = (FdtNode *)ptr;
         }
-        // Print(L"\n");
 
         if(!found)
             return NULL;
+
         if(!*p)
-            return ptr;
+            return (CHAR8 *)cur;
     }
 
     return NULL;
 }
 
-UINT8 *FdtGetProperty(FDT_HDR *hdr, UINT8 *NodePtr, CHAR8 *Name, UINT32 *OutLen)
+CHAR8 *FdtGetProperty(FdtNode *root, CHAR8 *NodePtr, CHAR8 *Name, UINT32 *OutLen)
 {
-    UINT8 *ptr = NodePtr;
+    CHAR8 *ptr = NodePtr + sizeof(FdtNode);
 
-    while(1) {
-        UINT32 tok = FdtReadU32(ptr);
+    if(((FdtNode *)NodePtr)->nProp == 0)
+        return NULL;
+
+    for(int i = 0; i < ((FdtNode *)NodePtr)->nProp; ++i) {
+        CHAR8 *propName = ptr;
+        ptr += FDT_PROPNAME_MAX;
+        UINT32 len = FdtReadU32(ptr);
         ptr += 4;
 
-        if(tok == FDT_PROP) {
-            CHAR8 *propName = ptr;
-            ptr += FDT_PROPNAME_MAX;
-            UINT32 len = FdtReadU32(ptr);
-            ptr += 4;
-
-            if(AsciiStrCmp(propName, Name) == 0) {
-                if(OutLen)
-                    *OutLen = len;
-                return ptr; // property data
-            }
-
-            UINT32 increment = (len + 3) & ~3; // align 4
-            ptr += increment;
+        if(AsciiStrCmp(propName, Name) == 0) {
+            if(OutLen)
+                *OutLen = len;
+            return ptr; // property data
         }
-        else if(tok == FDT_BEGIN_NODE) {
-            ptr += 8; // skip counts
-            break;
-        }
-        else if(tok == FDT_END_NODE || tok == FDT_END)
-            return NULL;
+
+        UINT32 increment = (len + 3) & ~3; // align 4
+        ptr += increment;
     }
     return NULL;
 }
 
-/* Skip over a node and all its children 
- * Call with: ptr = after BEGIN_NODE token
- * Returns: new ptr
- */
-UINT8 *_fastForward(UINT8 *ptr)
+EFI_STATUS FdtSetProperty(FdtNode *root, CHAR8 *NodePath, CHAR8 *Name, VOID *Data, UINT32 Len)
 {
-    // Print(L"fast forward (%p)\n", ptr);
-    UINT32 tok;
-    int depth = 1;
-    ptr += 8; // skip counts
-    while(1) {
-        tok = FdtReadU32(ptr);
-        ptr += 4;
-        switch(tok) {
-            case FDT_BEGIN_NODE:
-                ptr += 8; // skip counts
-                ++depth;
-                break;
-            case FDT_END_NODE:
-                --depth;
-                if(depth == 0)
-                    return ptr;
-                break;
-            case FDT_PROP: {
-                ptr = skipProperty(ptr);
-                break;
-            }
-            case FDT_END:
-                return NULL;
-            default:
-                Print(UEFI_STR("!! _fastForward: Unknown token %x at %p (depth %d)\n"), tok, ptr, depth);
-                return NULL;
-        }
-    }
-    return NULL;
-}
-
-EFI_STATUS FdtSetProperty(FDT_HDR *hdr, CHAR8 *NodePath, CHAR8 *Name, VOID *Data, UINT32 Len)
-{
-    UINT32 tok;
     FdtProperty prop = {0};
-    CopyMem(prop.name, Name, AsciiStrSize(Name));
-    prop.length = SwapBytes32(Len);
+    prop.length = Len;
+    AsciiStrCpyS(prop.name, FDT_PROPNAME_MAX, Name);
     
-    UINT8 *node = FdtFindNode(hdr, NodePath);
+    CHAR8 *node = FdtFindNode(root, NodePath);
     if(!node)
         return EFI_NOT_FOUND;
 
-    // Try replacing first
-    UINT32 oldLen;
-    UINT8 *oldprop = FdtGetProperty(hdr, node, Name, &oldLen);
-    if(oldprop && oldLen == Len) {
-        CopyMem(oldprop, Data, Len);
-        return EFI_SUCCESS;
-    }
-    // FIXME: if the len is different, we should still modify the prop
-    // instead of appending a new one (and we should delete the old if appending new)
-
+    CHAR8 *ptr = node + sizeof(node);
+ 
     // shift tail
-    UINT8 *end = (UINT8*)hdr + SwapBytes32(hdr->totalsize);
-    UINTN tail = end - node;
-    UINT32 propSize = (4 + Len + sizeof(prop) + 3) & ~3;
-    CopyMem(node + propSize, node, tail);
-
-    incProps(node);
+    CHAR8 *end = gEnd; //_fastForward((CHAR8 *)root);
+    UINTN tail = (UINTN)end - (UINTN)ptr;
+    UINT32 propSize = (Len + sizeof(prop) + 3) & ~3;
+    // Print(L"inserting prop %a at %p propsize %d tail %d end %p\n", Name, ptr, propSize, tail, end);
+    // dumpHex(node, 512, "FdtSetProperty pre copy");
+    CopyMem(ptr + propSize, ptr, tail);
+    // dumpHex(node, 512, "FdtSetProperty post copy");
 
     // write new prop
-    FdtWriteU32(node, FDT_PROP);
-    node += 4;
-    CopyMem(node, &prop, sizeof(prop));
-    node += sizeof(prop);
-    SetMem(node, (Len + 3) & ~3, 0); // pad to align 4
-    CopyMem(node, Data, Len);
+    CopyMem(ptr, &prop, sizeof(prop));
+    ptr += sizeof(prop);
+    CopyMem(ptr, Data, Len);
 
-    hdr->totalsize = SwapBytes32(SwapBytes32(hdr->totalsize) + propSize);
-    hdr->size_dt_struct = SwapBytes32(SwapBytes32(hdr->size_dt_struct) + propSize);
+    incProps((FdtNode *)node);
+    gEnd += propSize;
 
-    // dumpHex((UINT8 *)hdr + SwapBytes32(hdr->off_dt_struct), SwapBytes32(hdr->size_dt_struct), "FdtSetProperty()");
+    // dumpHex((CHAR8 *)root, 512, "FdtSetProperty()");
     return EFI_SUCCESS;
 }
 
-EFI_STATUS FdtCreateNode(FDT_HDR *hdr, CHAR8 *ParentPath, CHAR8 *Name)
+EFI_STATUS FdtCreateNode(FdtNode *root, CHAR8 *ParentPath, CHAR8 *Name)
 {
-    UINT32 tok;
-    UINT8 *parent = FdtFindNode(hdr, ParentPath);
+    CHAR8 *parent = FdtFindNode(root, ParentPath);
     if(!parent)
         return EFI_NOT_FOUND;
 
-    incChildren(parent);
-    
-    // Print(UEFI_STR("Finding END_NODE of parent %p\n"), parent);
-    while((tok = FdtReadU32(parent)) != FDT_END_NODE) {
-        parent += 4;
-
-        // if we have child nodes, we need to skip over them
-        switch(tok) {
-            case FDT_BEGIN_NODE: {
-                parent = _fastForward(parent);
-                break;
-            }
-            case FDT_PROP: {
-                parent = skipProperty(parent);
-                break;
-            }
-            case FDT_END_NODE:
-                break;
-            case FDT_END:
-                return EFI_NOT_FOUND;
-            default:
-                Print(L"!! FdtCreateNode: Unknown token %x at %p\n", tok, parent);
-                return EFI_ABORTED; // found invalid token
-        }
-        if(parent > (CHAR8 *)((UINTN)hdr + SwapBytes32(hdr->off_dt_struct) + SwapBytes32(hdr->size_dt_struct)))
-            return EFI_OUT_OF_RESOURCES;
-    }
-
-    // Print(UEFI_STR("Found at %p\n"), parent);
+    FdtNode *cur = (FdtNode *)parent;
     UINT32 namesize = AsciiStrSize(Name);
-    FdtProperty prop = {0};
-    CopyMem(prop.name, "name", 4);
-    prop.length = SwapBytes32(namesize);
 
-    UINT32 datasize = (namesize + 3) & ~3;
-    UINT32 newsize = 20 + sizeof(prop) + datasize;
-    UINT8 *end = ((UINT8*)hdr) + SwapBytes32(hdr->totalsize);
+    parent = skipProperties((FdtNode *)parent);
+
+    FdtNode node = {1, 0}; // 1 prop = "name"
+    FdtProperty prop = {"name", namesize};
+    UINT32 newsize = (sizeof(node) + sizeof(prop) + namesize + 3) & ~3;
+
+    CHAR8 *end = gEnd; //_fastForward((CHAR8 *)root);
     UINTN tail = end - parent;
-
-    // now shift everything forward and insert the node
-    // Print(UEFI_STR("newsize %d end %p tail %d prop size %d name %a len %d\n"),
-        // newsize, end, tail, sizeof(prop), prop.name, SwapBytes32(prop.length));
+    // dumpHex(parent, tail, "FdtCreateNode");
+    // Print(L"inserting node %a at %p newsize %d tail %d end %p\n", Name, parent, newsize, tail, end);
     CopyMem(parent + newsize, parent, tail);
-
-    FdtWriteU32(parent, FDT_BEGIN_NODE);
-    parent += 4;
-    FdtWriteU32(parent, 1); // 1 prop = "name"
-    parent += 4;
-    FdtWriteU32(parent, 0); // no child nodes
-    parent += 4;
-    FdtWriteU32(parent, FDT_PROP);
-    parent += 4;
-    CopyMem(parent, &prop, sizeof(prop));
-    parent += sizeof(prop);
+    CopyMem(parent, &node, sizeof(node));
+    CopyMem(parent + sizeof(node), &prop, sizeof(prop));
+    parent += sizeof(prop) + sizeof(node);
     CopyMem(parent, Name, namesize);
-    parent += datasize;
-    FdtWriteU32(parent, FDT_END_NODE);
-    parent += 4;
 
-    hdr->totalsize = SwapBytes32(SwapBytes32(hdr->totalsize) + newsize);
-    hdr->size_dt_struct = SwapBytes32(SwapBytes32(hdr->size_dt_struct) + newsize);
-
-    // dumpHex((UINT8 *)hdr + SwapBytes32(hdr->off_dt_struct), SwapBytes32(hdr->size_dt_struct), "FdtCreateNode()");
+    incChildren(cur);
+    gEnd += newsize;
+    // dumpHex((CHAR8 *)root, 512, "FdtCreateNode()");
     return EFI_SUCCESS;
 }
 
- // Dump FDT tree starting at hdr
-VOID FdtDump(FDT_HDR *hdr)
+FdtNode *FdtCreateEmpty(VOID)
 {
-    UINT8 *struct_block = (UINT8*)hdr + SwapBytes32(hdr->off_dt_struct);
-    UINT8 *end = struct_block + SwapBytes32(hdr->size_dt_struct);
-    UINT8 *ptr = struct_block;
-    UINTN indent = 0;
+    FdtNode node = {1, 0}; // 1 prop, no children
+    FdtProperty prop = {"name", 4};
 
-    Print(UEFI_STR("\n:: Device Tree (0x%x, %d bytes)\n"),
-        hdr, SwapBytes32(hdr->totalsize));
-    
-    while(ptr < end) {
-        UINT32 token = FdtReadU32(ptr);
-        ptr += 4;
+    CHAR8 *root = (CHAR8 *)ARGS_ADDR - 8 * EFI_PAGE_SIZE;
+    SetMem(root, sizeof(node)+sizeof(prop)+4, 0);
+    CopyMem(root, &node, sizeof(node));
+    CopyMem(root+sizeof(node), &prop, sizeof(prop));
+    gEnd = root + sizeof(node) + sizeof(prop) + 4;
 
-        switch (token) {
-        case FDT_BEGIN_NODE:
-        {
-            FdtNode *n = ptr;
-            ptr += 8; // skip nChildren and nProp
-            CHAR8 *name = FdtGetProperty(hdr, ptr, "name", NULL);
-            PrintIndent(indent);
-            Print(UEFI_STR("%a(%d,%d) / {\n"), n->nProp, n->nChildren, name);
-            indent++;
-            break;
-        }
-
-        case FDT_END_NODE:
-            indent--;
-            PrintIndent(indent);
-            Print(UEFI_STR("}\n"));
-            break;
-
-        case FDT_PROP:
-        {
-            CHAR8 *name = ptr;
-            ptr += FDT_PROPNAME_MAX;
-            UINT32 len  = FdtReadU32(ptr);
-            ptr += 4;
-            PrintIndent(indent);
-            Print(UEFI_STR("%a (len=%u) = "), name, len);
-
-            if(len == 4)
-                Print(UEFI_STR("<0x%08x>\n"), *(UINT32 *)ptr);
-            else if(len == 8)
-                Print(UEFI_STR("<0x%016lx>\n"), *(UINT64 *)ptr);
-            else {
-                UINT8 *p = ptr;
-                while(p < ptr+len) {
-                    Print(L"%c", _isprint(*p) ? *p : '.');
-                    ++p;
-                }
-                Print(L" [ ");
-                p = ptr;
-                while(p < ptr+len) {
-                    Print(L"%02x ", *p);
-                    ++p;
-                }
-                Print(L"]\n");
-            }
-
-            // Skip property value (padded to 4-byte alignment)
-            ptr += (len + 3) & ~3;
-            break;
-        }
-
-        case FDT_NOP:
-            PrintIndent(indent);
-            Print(UEFI_STR("(nop)\n"));
-            break;
-
-        case FDT_END:
-            Print(UEFI_STR(":: End of FDT\n"));
-            return;
-
-        default:
-            Print(UEFI_STR("!! FdtDump: Unknown token 0x%x\n"), token);
-            return;
-        }
-    }
-    Print(UEFI_STR("!! Reached end of structure block without FDT_END token\n"));
+    // dumpHex(root, 128, "FdtCreateEmpty()");
+    return (FdtNode *)root;
 }
 
-
-/**
- * Create a minimal empty Flattened Device Tree.
- *
- * Returns: Pointer to allocated FDT_HDR (caller must FreePool),
- *          or NULL on failure.
- */
-FDT_HDR *FdtCreateEmpty(VOID)
+VOID FdtDump(FdtNode *root)
 {
-    FdtProperty prop = {"name", 4};
-    UINT32 StructBlock[] = { 
-        FDT_BEGIN_NODE, 1, 0,  // 1 prop, no children
-          FDT_PROP,0,0,0,0,0,0,0,0,4,0,
-        FDT_END_NODE, FDT_END 
-    };
-
-    for(int j = 0; j < sizeof(StructBlock)/4; j++)
-        StructBlock[j] = SwapBytes32(StructBlock[j]);
-
-    UINT32 propSize = (sizeof(prop) + 4) & ~3;
-    UINT32 struct_size = sizeof(StructBlock) + propSize;
-
-    unsigned long long MemRsvMap[2] = {0, 0};
-    UINT32 mem_rsv_size = sizeof(MemRsvMap);
-
-    UINT32 off_mem_rsvmap = sizeof(FDT_HDR);
-    UINT32 off_dt_struct  = off_mem_rsvmap + mem_rsv_size;
-    UINT32 total_size = off_dt_struct + struct_size;
-
-    FDT_HDR *hdr = AllocateZeroPool(EFI_PAGE_SIZE);
-    if (!hdr)
-        return NULL;
-
-    hdr->magic = SwapBytes32(FDT_MAGIC);
-    hdr->totalsize = SwapBytes32(total_size);
-    hdr->off_dt_struct = SwapBytes32(off_dt_struct);
-    hdr->off_mem_rsvmap = SwapBytes32(off_mem_rsvmap);
-    hdr->version = SwapBytes32(17); // current version
-    hdr->last_comp_version = SwapBytes32(16); // Compatible with older loaders
-    hdr->boot_cpuid_phys = 0;
-    hdr->size_dt_strings = 0;
-    hdr->size_dt_struct = SwapBytes32(struct_size);
-
-    CopyMem(((UINT8*)hdr) + off_mem_rsvmap, MemRsvMap, mem_rsv_size);
-    CopyMem(((UINT8*)hdr) + off_dt_struct, StructBlock, struct_size);
-    prop.length = SwapBytes32(prop.length);
-    CopyMem((UINT8 *)hdr + off_dt_struct + 16, &prop, sizeof(FdtProperty));
-    // Strings block is empty; no copy needed.
-
-    // dumpHex((UINT8 *)hdr + off_dt_struct, struct_size, "FdtCreateEmpty()");
-    return hdr;
+    CHAR8 *ptr = (CHAR8 *)root + sizeof(FdtNode);
+    
 }

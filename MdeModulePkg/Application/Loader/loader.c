@@ -24,7 +24,6 @@
 
 #define VERSION_STR UEFI_STR("v0.5 IN DEVELOPMENT")
 #define KERNEL_LOAD_ADDRESS 0x100000; // 1 MB
-#define ARGS_ADDR 0x5000000 // 80 MB
 
 EFI_GUID gEfiDtbTableGuid = {0xb1b621d5, 0xf19c, 0x41a5, \
         {0x83, 0x0b, 0xd9, 0x15, 0x2c, 0x69, 0xaa, 0xe0}};
@@ -174,7 +173,7 @@ INT32 CompareGUIDs(EFI_GUID guid1, EFI_GUID guid2)
 }
 
 #define SET_BUFFER(x) CopyMem(buffer, x, AsciiStrSize(x))
-FDT_HDR *InitDTB(EFI_SYSTEM_TABLE *SystemTable)
+FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable)
 {
     EFI_STATUS Status;
     UINT32 v;
@@ -182,7 +181,7 @@ FDT_HDR *InitDTB(EFI_SYSTEM_TABLE *SystemTable)
     UINT8 entropy[ENTROPY_SIZE];
     EFI_RNG_PROTOCOL *RNG = 0;
 
-    FDT_HDR *DTB = FdtCreateEmpty();
+    FdtNode *DTB = FdtCreateEmpty();
     if(!DTB)
         return NULL;
 
@@ -308,14 +307,14 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 
     if(ACPI != 0)
         DTBLength = BuildDTBFromACPI(ACPI, DTB);
-    FdtDump(DTB);
+    Print(UEFI_STR("[] Created device tree\n"));
 
     LoadDrivers(ImageHandle);
     Status = LoadKernel(&KernelBuffer, &KernelEntry, &KernelSize);
     if (EFI_ERROR(Status))
         return Status;
 
-    BOOT_ARGS *BootArgs = (BOOT_ARGS *)(ARGS_ADDR - (8*EFI_PAGE_SIZE));
+    BOOT_ARGS *BootArgs = (BOOT_ARGS *)(ARGS_ADDR - (4*EFI_PAGE_SIZE));
     SetMem(BootArgs, sizeof(BOOT_ARGS), 0);
 
     BootArgs->Version = 2;

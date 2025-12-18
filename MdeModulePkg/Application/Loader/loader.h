@@ -66,6 +66,8 @@ extern EFI_GUID gEfiRngProtocolGuid;
 #define GRAPHICS_MODE         1
 #define FB_TEXT_MODE          2
 
+#define ARGS_ADDR 0x5000000 // 80 MB - where we stash FDT and boot args
+
 typedef struct {
     UINT32 baseAddr;
     UINT32 display;
@@ -171,11 +173,11 @@ int mapSegments(struct mach_header_64 *mh, UINTN *entry, EFI_FILE_HANDLE KernelF
 
 UINTN BuildDTBFromACPI(VOID *ACPI, VOID *DTB);
 
-FDT_HDR *FdtCreateEmpty(VOID);
-EFI_STATUS FdtCreateNode(FDT_HDR *hdr, CHAR8 *ParentPath, CHAR8 *Name);
-EFI_STATUS FdtSetProperty(FDT_HDR *hdr, CHAR8 *NodePath, CHAR8 *Name, VOID *Data, UINT32 Len);
-UINT8 *FdtGetProperty(FDT_HDR *hdr, UINT8 *NodePtr, CHAR8 *Name, UINT32 *OutLen);
-UINT8 *FdtFindNode(FDT_HDR *hdr, CHAR8 *Path);
-VOID FdtDump(FDT_HDR *hdr);
+FdtNode *FdtCreateEmpty(VOID);
+EFI_STATUS FdtCreateNode(FdtNode *root, CHAR8 *ParentPath, CHAR8 *Name);
+EFI_STATUS FdtSetProperty(FdtNode *root, CHAR8 *NodePath, CHAR8 *Name, VOID *Data, UINT32 Len);
+CHAR8 *FdtGetProperty(FdtNode *root, CHAR8 *NodePtr, CHAR8 *Name, UINT32 *OutLen);
+CHAR8 *FdtFindNode(FdtNode *root, CHAR8 *Path);
+VOID FdtDump(FdtNode *root);
 
 #endif // __LOADER_H
