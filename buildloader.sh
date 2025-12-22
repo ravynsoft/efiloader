@@ -13,7 +13,7 @@ export CPATH=${_SDK}/System/Library/Frameworks/Kernel.framework/Versions/A/Heade
 case ${OPSYS} in
   Darwin) TOOLCHAIN=XCODE5 ;;
   Win*) TOOLCHAIN=VS2022 ;;
-  *) TOOLCHAIN=GCC ;;
+  *) TOOLCHAIN=GCC5 ;;
 esac
 
 case ${MACHINE} in
@@ -24,6 +24,11 @@ echo ":: Building for ${MACHINE} on ${OPSYS}"
 _LIBDIR=${LIBDIR:-$(pwd)/Build/Emulator${MACHINE}/DEBUG_${TOOLCHAIN}/${MACHINE}}
 echo ":: Build outputs in ${_LIBDIR}"
 echo ":: Using ravynOS SDK at ${_SDK}"
+
+if ! [ -x BaseTools/Bin/VfrCompile ]; then
+  echo ":: Building Base Tools"
+  CC=clang CXX=clang++ make -C BaseTools/Source/C
+fi
 
 if ! [ -f ${_LIBDIR}/BaseLib.lib ]; then
   echo ":: Building EDK2 libraries"
