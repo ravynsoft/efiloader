@@ -169,13 +169,13 @@ UINTN BuildDTBFromACPI(VOID *ACPI, VOID *DTB)
     UINT32 *entry = (UINT32 *)(((UINTN)sdt) + sizeof(ACPI_SDT_HEADER));
     for(int i = 0; i < count; ++i) {
         Print(UEFI_STR("     +-- %lx ["), entry);
-        ACPI_SDT_HEADER *h = (ACPI_SDT_HEADER *)(*entry);
+        ACPI_SDT_HEADER *h = (ACPI_SDT_HEADER *)((long)(*entry));
         Print(UEFI_STR("%c%c%c%c, %d bytes]\n"), h->signature[0],
             h->signature[1], h->signature[2], h->signature[3], h->length);
         if(!CompareMem(h->signature, ACPI_TID_FACP, 4))
-            parseFADT(h, DTB);
+            parseFADT((ACPI_FADT *)h, DTB);
         else if(!CompareMem(h->signature, ACPI_TID_APIC, 4))
-            parseAPIC(h, DTB);
+            parseAPIC((ACPI_APIC *)h, DTB);
         entry++; // +4 bytes
         if(entsize == 8)
             entry++;

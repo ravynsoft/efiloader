@@ -23,6 +23,21 @@
 #ifndef __LOADER_H
 #define __LOADER_H
 
+/* host headers */
+#if defined(__linux__)
+# if defined(__x86_64__) || defined(__arm64__)
+#  define __LITTLE_ENDIAN__ 1
+# else
+#  error Unknown endianness
+# endif
+# if defined(__GCC__)
+#  error GCC is defined
+# endif
+#else
+# include <i386/endian.h>
+#endif
+
+/* application headers */
 #include <Uefi.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiLib.h>
@@ -35,9 +50,8 @@
 #include <Guid/SmBios.h>
 #include <Guid/Acpi.h>
 
-/* XNU headers */
+/* SDK headers */
 #include <mach-o/loader.h>
-#include <i386/endian.h>
 
 extern EFI_GUID gEfiDtbTableGuid;
 extern EFI_GUID gEfiAcpiTableGuid;

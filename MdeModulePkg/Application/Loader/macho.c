@@ -72,8 +72,12 @@ error:
     return 0;
 }
 
-#define SECTION_TYPE(x) ((UINT32)x & 0xff000000)
-#define SECTION_ATTR(x) ((UINT32)x & 0xffffff)
+#if !defined(SECTION_TYPE)
+# define SECTION_TYPE(x) ((UINT32)x & 0xff000000)
+#endif
+#if !defined(SECTION_ATTR)
+# define SECTION_ATTR(x) ((UINT32)x & 0xffffff)
+#endif
 
 int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE KernelFile)
 {

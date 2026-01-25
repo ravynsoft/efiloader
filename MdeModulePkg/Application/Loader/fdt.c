@@ -24,21 +24,21 @@
 #include <sys/cdefs.h>
 
 CHAR8 *_fastForward(CHAR8 *ptr);
-
 CHAR8* gEnd = 0;
 
 /* Static helper functions */
-STATIC VOID PrintIndent(UINTN level)
-{
-    for(UINTN i = 0; i < level; i++)
-        Print(UEFI_STR("  "));
-}
-
 STATIC UINT32 FdtReadU32(CHAR8 *p)
 {
     UINT32 v;
     CopyMem(&v, p, 4);
     return v; //SwapBytes32(v);
+}
+
+#if defined(DEBUG)
+STATIC VOID PrintIndent(UINTN level)
+{
+    for(UINTN i = 0; i < level; i++)
+        Print(UEFI_STR("  "));
 }
 
 STATIC VOID FdtWriteU32(CHAR8 *p, UINT32 v)
@@ -54,7 +54,7 @@ STATIC BOOLEAN _isprint(const CHAR8 ch)
     return FALSE;
 }
 
-STATIC VOID dumpHex(CHAR8 *addr, UINTN size, const CHAR8 *source)
+STATIC VOID dumpHex(CHAR8 *addr, UINTN size, const CHAR8 *source) 
 {
     int index = 0;
     Print(L"DUMPHEX %a %p %x", source, addr, size);
@@ -74,14 +74,13 @@ STATIC VOID dumpHex(CHAR8 *addr, UINTN size, const CHAR8 *source)
     }
     Print(L"\n");
 }
+#endif /* DEBUG */
 
 STATIC CHAR8 *skipProperty(CHAR8 *ptr)
 {
-    const CHAR8 *name = ptr;
     ptr += FDT_PROPNAME_MAX; // skip name
     UINT32 datasize = FdtReadU32(ptr);
     ptr += 4;
-    // Print(L"skipProperty(size=0x%x, name=%a, ptr=%p)\n", datasize, name, ptr+datasize);
     return (CHAR8 *)(((UINTN)ptr + datasize + 3) & ~3);
 }
 
@@ -89,7 +88,6 @@ STATIC CHAR8 *skipProperties(FdtNode *node)
 {
     CHAR8 *ptr = (CHAR8 *)node + sizeof(node);
     for(int i = 0; i < node->nProp; ++i) {
-        // Print(L"skipping %d of %d properties\n", i+1, node->nProp);
         ptr = skipProperty(ptr);
     }
     return ptr;
@@ -101,7 +99,6 @@ STATIC CHAR8 *skipProperties(FdtNode *node)
  */
 CHAR8 *_fastForward(CHAR8 *ptr)
 {
-    // Print(L"fast forward (%p)\n", ptr);
     FdtNode *cur = (FdtNode *)ptr;
 
     ptr += sizeof(FdtNode); // skip node counts and point at first child
@@ -138,12 +135,10 @@ CHAR8 *FdtFindNode(FdtNode *root, CHAR8 *Path)
         return (CHAR8 *)root;
 
     CHAR8 segment[128];
-    UINT32 depth = 0;
 
     // ptr is beginning of nodes block
     // p is char after leading / in path (\0 for root path)
 
-    // Print(L"FindNode Path=%a\n", Path);
     FdtNode *cur = root;
     while(1) {
         UINT32 idx = 0;
@@ -155,27 +150,22 @@ CHAR8 *FdtFindNode(FdtNode *root, CHAR8 *Path)
 
         if(*p == '/')
             p++; // skip path separator
-        // Print(L"FindNode segment=%a p=%a depth=%d\n", segment, p, depth);
 
         // walk the tree until we find it
         CHAR8 *ptr;
         BOOLEAN found = FALSE;
         while(!found) {
             CHAR8 *name = FdtGetProperty(root, (CHAR8 *)cur, "name", NULL);
-            // Print(L"cur->name = %a\n", name);
             if(AsciiStrCmp(name, segment) == 0) {
                 found = TRUE;
                 ptr = (CHAR8 *)cur;
-                // Print(L"FOUND on cur, ptr=%p\n", ptr);
                 break;
             }
             ptr = skipProperties(cur);
             for(int i = 0; i < cur->nChildren; ++i) {
                 name = FdtGetProperty(root, ptr, "name", NULL);
-                // Print(L"ptr->name = %a\n", name);
                 if(AsciiStrCmp(name, segment) == 0) {
                     found = TRUE;
-                    // Print(L"FOUND in children, ptr=%p\n", ptr);
                     break;
                 }
                 ptr = _fastForward((CHAR8 *)ptr);
@@ -231,13 +221,10 @@ EFI_STATUS FdtSetProperty(FdtNode *root, CHAR8 *NodePath, CHAR8 *Name, VOID *Dat
     CHAR8 *ptr = node + sizeof(node);
  
     // shift tail
-    CHAR8 *end = gEnd; //_fastForward((CHAR8 *)root);
+    CHAR8 *end = gEnd;
     UINTN tail = (UINTN)end - (UINTN)ptr;
     UINT32 propSize = (Len + sizeof(prop) + 3) & ~3;
-    // Print(L"inserting prop %a at %p propsize %d tail %d end %p\n", Name, ptr, propSize, tail, end);
-    // dumpHex(node, 512, "FdtSetProperty pre copy");
     CopyMem(ptr + propSize, ptr, tail);
-    // dumpHex(node, 512, "FdtSetProperty post copy");
 
     // write new prop
     CopyMem(ptr, &prop, sizeof(prop));
@@ -247,7 +234,6 @@ EFI_STATUS FdtSetProperty(FdtNode *root, CHAR8 *NodePath, CHAR8 *Name, VOID *Dat
     incProps((FdtNode *)node);
     gEnd += propSize;
 
-    // dumpHex((CHAR8 *)root, 512, "FdtSetProperty()");
     return EFI_SUCCESS;
 }
 
@@ -266,10 +252,8 @@ EFI_STATUS FdtCreateNode(FdtNode *root, CHAR8 *ParentPath, CHAR8 *Name)
     FdtProperty prop = {"name", namesize};
     UINT32 newsize = (sizeof(node) + sizeof(prop) + namesize + 3) & ~3;
 
-    CHAR8 *end = gEnd; //_fastForward((CHAR8 *)root);
+    CHAR8 *end = gEnd;
     UINTN tail = end - parent;
-    // dumpHex(parent, tail, "FdtCreateNode");
-    // Print(L"inserting node %a at %p newsize %d tail %d end %p\n", Name, parent, newsize, tail, end);
     CopyMem(parent + newsize, parent, tail);
     CopyMem(parent, &node, sizeof(node));
     CopyMem(parent + sizeof(node), &prop, sizeof(prop));
@@ -278,7 +262,6 @@ EFI_STATUS FdtCreateNode(FdtNode *root, CHAR8 *ParentPath, CHAR8 *Name)
 
     incChildren(cur);
     gEnd += newsize;
-    // dumpHex((CHAR8 *)root, 512, "FdtCreateNode()");
     return EFI_SUCCESS;
 }
 
@@ -293,12 +276,5 @@ FdtNode *FdtCreateEmpty(VOID)
     CopyMem(root+sizeof(node), &prop, sizeof(prop));
     gEnd = root + sizeof(node) + sizeof(prop) + 4;
 
-    // dumpHex(root, 128, "FdtCreateEmpty()");
     return (FdtNode *)root;
-}
-
-VOID FdtDump(FdtNode *root)
-{
-    CHAR8 *ptr = (CHAR8 *)root + sizeof(FdtNode);
-    
 }

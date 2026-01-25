@@ -8,7 +8,7 @@ echo "---------------------------------"
 MACHINE=$(uname -m)
 OPSYS=$(uname -s)
 _SDK=${SDK:-/Library/Developer/ravynOS.sdk}
-export CPATH=${_SDK}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers:${_SDK}/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders:${SDK}/usr/include
+export CPATH=${_SDK}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers:${_SDK}/usr/include
 
 case ${OPSYS} in
   Darwin) TOOLCHAIN=XCODE5 ;;
@@ -35,7 +35,7 @@ if ! [ -f ${_LIBDIR}/BaseLib.lib ]; then
   (unset WORKSPACE EDK_TOOLS_PATH; ./EmulatorPkg/build.sh libraries)
 fi
 
-source edksetup.sh
+source ./edksetup.sh
 build -t ${TOOLCHAIN} -a ${MACHINE} -m MdeModulePkg/Application/Loader/Loader.inf || exit 1
 
 echo ":: Finished"

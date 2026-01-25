@@ -132,8 +132,8 @@ EFI_STATUS LoadDrivers(EFI_HANDLE ImageHandle)
 {
     EFI_STATUS Status;
     EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs;
-    EFI_FILE_HANDLE Root, ravynOS, driverHandle;
-    EFI_DEVICE_PATH devicePath;
+    EFI_FILE_HANDLE Root, ravynOS /*, driverHandle*/ ;
+    /* EFI_DEVICE_PATH devicePath; */
 
     Status = gBS->LocateProtocol(&gEfiSimpleFileSystemProtocolGuid, NULL, (VOID**)&Fs);
     if (EFI_ERROR(Status))
@@ -176,7 +176,6 @@ INT32 CompareGUIDs(EFI_GUID guid1, EFI_GUID guid2)
 FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable)
 {
     EFI_STATUS Status;
-    UINT32 v;
     UINT8 buffer[256];
     UINT8 entropy[ENTROPY_SIZE];
     EFI_RNG_PROTOCOL *RNG = 0;
@@ -235,11 +234,9 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     EFI_STATUS Status;
     VOID *KernelBuffer = NULL;
     UINTN KernelEntry = 0, KernelSize = 0;
-    EFI_HANDLE SMBIOSHandle, ACPIHandle, DTBHandle;
     VOID *SMBIOS = NULL; // SMBIOS table pointer
     VOID *ACPI = NULL; // ACPI table pointer
     VOID *DTB = NULL; // Device Table Blob pointer
-    UINTN DTBLength = 0;
     UINTN MapKey, DescriptorSize, MemoryMapSize = 0;
     UINT64 physPages = 0;
     UINT32 DescriptorVersion;
@@ -261,7 +258,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 
     DTB = InitDTB(SystemTable);
 
-    for(region = MemoryMap; region < ((UINT8 *)MemoryMap + MemoryMapSize); region += DescriptorSize) {
+    for(region = (UINT8 *)MemoryMap; region < ((UINT8 *)MemoryMap + MemoryMapSize); region += DescriptorSize) {
         switch(((EFI_MEMORY_DESCRIPTOR *)region)->Type) {
             case EfiConventionalMemory:
             case EfiBootServicesCode:
@@ -306,7 +303,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     }
 
     if(ACPI != 0)
-        DTBLength = BuildDTBFromACPI(ACPI, DTB);
+        BuildDTBFromACPI(ACPI, DTB);
     Print(UEFI_STR("[] Created device tree\n"));
 
     LoadDrivers(ImageHandle);
@@ -327,12 +324,12 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     BootArgs->kaddr = KERNEL_LOAD_ADDRESS;
     BootArgs->ksize = KernelSize;
     BootArgs->kslide = 0;
-    BootArgs->efiRuntimeServicesPageStart = (UINT32)(SystemTable->RuntimeServices);
+    BootArgs->efiRuntimeServicesPageStart = (UINT32)((UINT64)(SystemTable->RuntimeServices));
     UINT32 size = SystemTable->RuntimeServices->Hdr.HeaderSize - sizeof(EFI_TABLE_HEADER);
     UINT32 pages = size / EFI_PAGE_SIZE + 1;
     BootArgs->efiRuntimeServicesPageCount = pages;
     BootArgs->efiRuntimeServicesVirtualPageStart = (UINT64)(SystemTable->RuntimeServices);
-    BootArgs->efiSystemTable = (UINT32)SystemTable;
+    BootArgs->efiSystemTable = (UINT32)((UINT64)SystemTable);
     BootArgs->perfDataStart = 0;
     BootArgs->perfDataSize = 0;
     BootArgs->keystoreDataStart = 0;
@@ -353,7 +350,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     // BootArgs->APFSDataStart =
     // BootArgs->APFSDataSize =
 
-    BootArgs->MemoryMap = (UINT32)MemoryMap;
+    BootArgs->MemoryMap = (UINT32)((UINT64)MemoryMap);
     BootArgs->MemoryMapSize = MemoryMapSize;
     BootArgs->MemoryMapDescriptorSize = DescriptorSize;
     BootArgs->MemoryMapDescriptorVersion = DescriptorVersion;
