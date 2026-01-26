@@ -72,12 +72,12 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
     EFI_FILE_HANDLE Root, KernelFile;
     struct mach_header_64 *MachHeader = (VOID *)ARGS_ADDR;
 
-    Status = gBS->AllocatePages(AllocateAddress, EfiLoaderData,
-        EFI_SIZE_TO_PAGES(16384), (EFI_PHYSICAL_ADDRESS *)MachHeader);
-    if(EFI_ERROR(Status)) {
-        Print(UEFI_STR("Failed to allocate memory: %r\n"), Status);
-        return Status;
-    }
+    //Status = gBS->AllocatePages(AllocateAny, EfiLoaderData,
+    //    EFI_SIZE_TO_PAGES(16384), (EFI_PHYSICAL_ADDRESS *)MachHeader);
+    //if(EFI_ERROR(Status)) {
+    //    Print(UEFI_STR("Failed to allocate memory: %r\n"), Status);
+    //    return Status;
+    //}
 
     Status = gBS->LocateProtocol(&gEfiSimpleFileSystemProtocolGuid, NULL, (VOID**)&Fs);
     if (EFI_ERROR(Status))
@@ -302,9 +302,10 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
         }
     }
 
+    UINT32 DTBLength = 0;
     if(ACPI != 0)
-        BuildDTBFromACPI(ACPI, DTB);
-    Print(UEFI_STR("[] Created device tree\n"));
+        DTBLength = BuildDTBFromACPI(ACPI, DTB);
+    Print(UEFI_STR("[] Created device tree at 0x%p\n"), DTB);
 
     LoadDrivers(ImageHandle);
     Status = LoadKernel(&KernelBuffer, &KernelEntry, &KernelSize);
@@ -319,8 +320,8 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     BootArgs->Flags = kBootArgsFlagHiDPI;
     AsciiStrCpyS(BootArgs->CommandLine, 1024, "-v -s debug=1 diagnostic_api=1");
     BootArgs->VideoV1 = videoV1;
-    BootArgs->DeviceTree = (UINTN)DTB + SwapBytes32((UINT32)((FDT_HDR *)DTB)->off_dt_struct) + 4; //skip node token
-    BootArgs->DeviceTreeLength = ((FDT_HDR *)DTB)->size_dt_struct;
+    BootArgs->DeviceTree = (UINTN)DTB;
+    BootArgs->DeviceTreeLength = DTBLength;
     BootArgs->kaddr = KERNEL_LOAD_ADDRESS;
     BootArgs->ksize = KernelSize;
     BootArgs->kslide = 0;
@@ -330,7 +331,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     BootArgs->efiRuntimeServicesPageCount = pages;
     BootArgs->efiRuntimeServicesVirtualPageStart = (UINT64)(SystemTable->RuntimeServices);
     BootArgs->efiSystemTable = (UINT32)((UINT64)SystemTable);
-    BootArgs->perfDataStart = 0;
+    BootArgs->perfDataStart = 0; // I think this should point to the llvm sections in __DATA
     BootArgs->perfDataSize = 0;
     BootArgs->keystoreDataStart = 0;
     BootArgs->keystoreDataSize = 0;

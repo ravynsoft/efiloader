@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2025 Zoe Knox <zoe@pixin.net>
+ * Copyright (C) 2025,2026 Zoe Knox <zoe@pixin.net>
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -81,6 +81,7 @@ error:
 
 int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE KernelFile)
 {
+    struct mach_header_64 *mh_exec_hdr = 0;
     int size = 0;
     uint32_t offset = sizeof(struct mach_header_64);
     for(int i = 0; i < mh->ncmds; ++i) {
@@ -116,6 +117,8 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
 #endif
                     if(!StrCmp(segname, UEFI_STR("__HIB")) && !StrCmp(sectname, UEFI_STR("__text")))
                         *KernelEntry = (UINT32)lsect->addr; // _start is the first routine
+                    else if(!StrCmp(segname, UEFI_STR("__TEXT")) && !StrCmp(sectname, UEFI_STR("__text")))
+                        mh_exec_hdr = (struct mach_header_64 *)((ls->vmaddr) & 0xffffffff);
 
                     Status = EFI_SUCCESS;
                     if(lsect->size) {
@@ -136,6 +139,10 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
         }
         offset += lc->cmdsize;
     }
+
+    /* Put the kernel header where it belongs */
+    Print(UEFI_STR("Copy MH header: %p <-- %p  %d bytes\n"), mh_exec_hdr, mh, mh->sizeofcmds);
+    CopyMem(mh_exec_hdr, mh, mh->sizeofcmds);
 
     return size;
 }
