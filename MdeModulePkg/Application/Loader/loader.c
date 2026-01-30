@@ -173,6 +173,8 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable)
     EFI_STATUS Status;
     UINT8 buffer[256];
     UINT8 entropy[ENTROPY_SIZE];
+    UINT64 val64;
+    UINT32 val;
     EFI_RNG_PROTOCOL *RNG = 0;
 
     FdtNode *DTB = FdtCreateEmpty();
@@ -187,16 +189,18 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable)
 
     FdtCreateNode(DTB, "/", "cpus");
     FdtCreateNode(DTB, "/", "memory");
-    
+
     FdtCreateNode(DTB, "/", "chosen");
     FdtSetProperty(DTB, "/chosen", "random-seed", entropy, ENTROPY_SIZE);
     FdtCreateNode(DTB, "/chosen", "memory-map");
     FdtCreateNode(DTB, "/chosen", "osenvironment");
     FdtCreateNode(DTB, "/chosen", "ephemeral-storage");
     FdtCreateNode(DTB, "/chosen", "use-recovery-securityd");
-    
-    FdtCreateNode(DTB, "/", "defaults");
 
+    val = 1024;
+    FdtCreateNode(DTB, "/", "defaults");
+    FdtSetProperty(DTB, "/defaults", "kern.max_task_pmem", &val, 4);
+    
     FdtCreateNode(DTB, "/", "efi");
     FdtSetProperty(DTB, "/efi", "firmware-revision", &SystemTable->FirmwareRevision, 4);
     FdtSetProperty(DTB, "/efi", "firmware-vendor", SystemTable->FirmwareVendor, StrSize(SystemTable->FirmwareVendor));
@@ -216,12 +220,12 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable)
     SET_BUFFER("configuration-table");
     FdtSetProperty(DTB, "/efi/runtime-services/configuration-table", "name", buffer, AsciiStrSize((char *)buffer));
 
-    UINT32 val = 0;
+    val = 0;
     FdtCreateNode(DTB, "/efi", "platform");
     FdtSetProperty(DTB, "/efi/platform", "apple-coprocessor-version", &val, 4);
     FdtSetProperty(DTB, "/efi/platform", "boot-chime-on-last-boot", &val, 4);
 
-    UINT64 val64 = 133000000;
+    val64 = 133000000;
     FdtSetProperty(DTB, "/efi/platform", "FSBFrequency", &val64, 8); // FIXME: get from ACPI?
     val64 = 24000000;
     FdtSetProperty(DTB, "/efi/platform", "ARTFrequency", &val64, 8); // FIXME: read actual ART
@@ -353,35 +357,38 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 
     BOOT_ARGS *BootArgs = (BOOT_ARGS *)(KernelBuffer + KernelSize);
     SetMem(BootArgs, sizeof(BOOT_ARGS), 0);
-    UINT32 ps = EFI_PAGE_SIZE - 1;
-    KernelSize += (sizeof(BOOT_ARGS) + ps) & ~ps; // pad and align
-
-    // Rebase the efi tables to the end of boot args
-    VOID *p = KernelBuffer + KernelSize;
-    KernelSize += (SystemTable->Hdr.HeaderSize + ps) & ~ps; // pad and align
-    CopyMem(p, SystemTable, SystemTable->Hdr.HeaderSize);
-    CopyMem(p + SystemTable->Hdr.HeaderSize, SystemTable->RuntimeServices, SystemTable->RuntimeServices->Hdr.HeaderSize);
-    EFI_SYSTEM_TABLE *st = ((EFI_SYSTEM_TABLE *)p);
-    st->RuntimeServices = (EFI_RUNTIME_SERVICES *)((UINT64)(p + SystemTable->Hdr.HeaderSize) | 0xffffff8000000000);
-    st->Hdr.CRC32 = 0;
-    gBS->CalculateCrc32(&st->Hdr, st->Hdr.HeaderSize, &st->Hdr.CRC32);
-
     BootArgs->Version = 2;
     BootArgs->EFIMode = 64;
     BootArgs->Flags = kBootArgsFlagCSRActiveConfig | kBootArgsFlagCSRConfigMode | kBootArgsFlagCSRBoot;
     AsciiStrCpyS(BootArgs->CommandLine, 1024, cmdLine); 
     BootArgs->VideoV1 = videoV1;
+
+    UINT32 ps = EFI_PAGE_SIZE - 1;
+    KernelSize += (sizeof(BOOT_ARGS) + ps) & ~ps; // pad and align
+
+    // Rebase the efi tables to the end of boot args
+    VOID *p = KernelBuffer + KernelSize;
+    CopyMem(p, SystemTable, SystemTable->Hdr.HeaderSize);
+    CopyMem(p + SystemTable->Hdr.HeaderSize, SystemTable->RuntimeServices, SystemTable->RuntimeServices->Hdr.HeaderSize);
+
+    EFI_SYSTEM_TABLE *st = ((EFI_SYSTEM_TABLE *)p);
+    st->RuntimeServices = (EFI_RUNTIME_SERVICES *)((UINT64)(p + SystemTable->Hdr.HeaderSize) | 0xffffff8000000000);
+    st->Hdr.CRC32 = 0;
+    gBS->CalculateCrc32(&st->Hdr, st->Hdr.HeaderSize, &st->Hdr.CRC32);
+    BootArgs->efiSystemTable = (UINT32)((UINT64)st);
+
+    KernelSize += (SystemTable->Hdr.HeaderSize + SystemTable->RuntimeServices->Hdr.HeaderSize + ps) & ~ps;
+
     BootArgs->DeviceTree = (UINTN)DTB;
     BootArgs->DeviceTreeLength = DTBLength;
     BootArgs->kaddr = KERNEL_LOAD_ADDRESS;
     BootArgs->ksize = KernelSize;
     BootArgs->kslide = 0;
-    BootArgs->efiRuntimeServicesPageStart = (UINT32)((UINT64)p + SystemTable->Hdr.HeaderSize);
+    BootArgs->efiRuntimeServicesPageStart = (UINT32)((UINT64)st->RuntimeServices);
     UINT32 size = SystemTable->RuntimeServices->Hdr.HeaderSize;
     UINT32 pages = size / EFI_PAGE_SIZE + 1;
     BootArgs->efiRuntimeServicesPageCount = pages;
-    BootArgs->efiRuntimeServicesVirtualPageStart = BootArgs->efiRuntimeServicesPageStart | 0xffffff8000000000;
-    BootArgs->efiSystemTable = (UINT32)((UINT64)p);
+    BootArgs->efiRuntimeServicesVirtualPageStart = (UINT64)st->RuntimeServices;
     BootArgs->keystoreDataStart = 0; // phys addr of keystore data for iokit
     BootArgs->keystoreDataSize = 0;
     BootArgs->Video = video;

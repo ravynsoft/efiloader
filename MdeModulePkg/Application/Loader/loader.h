@@ -81,10 +81,10 @@ extern UINT64 bootStackTop;
 #define GRAPHICS_MODE         1
 #define FB_TEXT_MODE          2
 
-#define MH_ADDR 0x5000000 // 80 MB - where we stash mach_header while loading
-#define ARGS_ADDR 0x24000 // where we stash boot args
-#define MMAP_ADDR 0x10000 // location of EFI memory map
-#define DTB_ADDR 0x14000  // where we stash FDT
+#define MH_ADDR     0x5000000   // 80 MB - where we stash mach_header while loading
+#define ARGS_ADDR   0x44000     // where we stash boot args
+#define DTB_ADDR    0x14000     // where we stash FDT
+#define MMAP_ADDR   0x10000     // location of EFI memory map
 
 /*  Memory layout of our boot data
  *   +---------------+
