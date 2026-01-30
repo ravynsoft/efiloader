@@ -21,7 +21,7 @@
  */
 
 #include "loader.h"
-
+UINT64 bootStackTop = 0;
 
 UINT64 readULEB128(const UINT8 **p, const UINT8 *end)
 {
@@ -81,6 +81,7 @@ error:
 
 int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE KernelFile)
 {
+    UINT32 kernelTop = 0, kernelBase = 0;
     struct mach_header_64 *mh_exec_hdr = 0;
     int size = 0;
     uint32_t offset = sizeof(struct mach_header_64);
@@ -99,12 +100,6 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
                 if(ls->vmsize == 0)
                     break;
 
-                VOID *physaddr = (VOID *)(ls->vmaddr & 0xffffffff);
-                UINTN size = ls->vmsize;
-                EFI_STATUS Status = gBS->AllocatePages(AllocateAnyPages, EfiLoaderData,
-                    EFI_SIZE_TO_PAGES(size), physaddr);
-                SetMem(physaddr, size, 0);
-
                 struct section_64 *lsect = 
                     (struct section_64 *)((UINT64)(((UINT64)ls) + sizeof(struct segment_command_64)));
                 for(int x=0; x<ls->nsects; ++x) {
@@ -115,16 +110,34 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
                         sectname, lsect->addr, lsect->offset, lsect->size, lsect->align,
                         lsect->nreloc, lsect->reloff, lsect->flags);
 #endif
-                    if(!StrCmp(segname, UEFI_STR("__HIB")) && !StrCmp(sectname, UEFI_STR("__text")))
-                        *KernelEntry = (UINT32)lsect->addr; // _start is the first routine
-                    else if(!StrCmp(segname, UEFI_STR("__TEXT")) && !StrCmp(sectname, UEFI_STR("__text")))
+                    if(!StrCmp(segname, UEFI_STR("__HIB"))) {
+                        if(!StrCmp(sectname, UEFI_STR("__text")))
+                            *KernelEntry = (UINT32)lsect->addr; // _start is the first routine
+                        else if(!StrCmp(sectname, UEFI_STR("__data")))
+                            bootStackTop = lsect->addr;
+                        else if(!StrCmp(sectname, UEFI_STR("__bootPT")))
+                            kernelBase = lsect->addr;
+                    } else if(!StrCmp(segname, UEFI_STR("__TEXT")) && !StrCmp(sectname, UEFI_STR("__text")))
                         mh_exec_hdr = (struct mach_header_64 *)((ls->vmaddr) & 0xffffffff);
+                    else if(!StrCmp(segname, UEFI_STR("__LAST")) && !StrCmp(sectname, UEFI_STR("__last")))
+                        kernelTop = lsect->addr;
 
-                    Status = EFI_SUCCESS;
+                    EFI_STATUS Status = EFI_SUCCESS;
                     if(lsect->size) {
+                        VOID *physaddr = (VOID *)(lsect->addr & 0xffffffff);
+                        UINTN align = 1;
+                        for(int x = 0; x < lsect->align; ++x) align *= 2;
+                        --align;
+                        UINTN size = (lsect->size + align) & ~align;
+                        Status = gBS->AllocatePages(AllocateAnyPages, EfiLoaderData, EFI_SIZE_TO_PAGES(size), physaddr);
+                        SetMem(physaddr, size, 0);
+                        if(EFI_ERROR(Status))
+                            Print(UEFI_STR("!! ERROR %r\n"), Status);
+                        if((UINTN)physaddr != (lsect->addr & 0xffffffff))
+                            Print(UEFI_STR("!! ERROR physaddr != lsect->addr\n"));
+
                         Status = KernelFile->SetPosition(KernelFile, lsect->offset);
                         size = lsect->size;
-                        physaddr = (void *)(lsect->addr & 0xffffffff);
                         Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)physaddr);
                     }
                     if(EFI_ERROR(Status))
@@ -141,8 +154,7 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
     }
 
     /* Put the kernel header where it belongs */
-    Print(UEFI_STR("Copy MH header: %p <-- %p  %d bytes\n"), mh_exec_hdr, mh, mh->sizeofcmds);
     CopyMem(mh_exec_hdr, mh, mh->sizeofcmds);
 
-    return size;
+    return kernelTop - kernelBase;
 }

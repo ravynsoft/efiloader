@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2025 Zoe Knox <zoe@pixin.net>
+ * Copyright (C) 2025-2026 Zoe Knox <zoe@pixin.net>
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -58,6 +58,7 @@ extern EFI_GUID gEfiAcpiTableGuid;
 extern EFI_GUID gEfiSmbios3TableGuid;
 extern EFI_GUID gEfiSmbiosTableGuid;
 extern EFI_GUID gEfiRngProtocolGuid;
+extern UINT64 bootStackTop;
 
 #define UEFI_STR(s) ((CHAR16 *)u##s)
 #define GB (1024*1024*1024)
@@ -80,7 +81,22 @@ extern EFI_GUID gEfiRngProtocolGuid;
 #define GRAPHICS_MODE         1
 #define FB_TEXT_MODE          2
 
-#define ARGS_ADDR 0x5000000 // 80 MB - where we stash FDT and boot args
+#define MH_ADDR 0x5000000 // 80 MB - where we stash mach_header while loading
+#define ARGS_ADDR 0x24000 // where we stash boot args
+#define MMAP_ADDR 0x10000 // location of EFI memory map
+#define DTB_ADDR 0x14000  // where we stash FDT
+
+/*  Memory layout of our boot data
+ *   +---------------+
+ *   |  kernel base  |
+ *   +---------------+ 0x191000
+ *   |  boot args    |   .. 4 pages
+ *   +---------------+ 0x24000
+ *   |  device tree  |
+ *   +---------------+ 0x14000
+ *   |  mem map      |   .. 4 pages
+ *   +---------------+ 0x10000
+ */
 
 typedef struct {
     UINT32 baseAddr;
@@ -146,6 +162,24 @@ typedef struct {
     UINT32 _reserved[710];
 } BOOT_ARGS;
 extern char assert_boot_args_size_is_4096[sizeof(BOOT_ARGS) == 4096 ? 1 : -1];
+
+#define CSR_ALLOW_UNTRUSTED_KEXTS               (1 << 0)
+#define CSR_ALLOW_UNRESTRICTED_FS               (1 << 1)
+#define CSR_ALLOW_TASK_FOR_PID                  (1 << 2)
+#define CSR_ALLOW_KERNEL_DEBUGGER               (1 << 3)
+#define CSR_ALLOW_APPLE_INTERNAL                (1 << 4)
+#define CSR_ALLOW_DESTRUCTIVE_DTRACE    (1 << 5) /* name deprecated */
+#define CSR_ALLOW_UNRESTRICTED_DTRACE   (1 << 5)
+#define CSR_ALLOW_UNRESTRICTED_NVRAM    (1 << 6)
+#define CSR_ALLOW_DEVICE_CONFIGURATION  (1 << 7)
+#define CSR_ALLOW_ANY_RECOVERY_OS       (1 << 8)
+#define CSR_ALLOW_UNAPPROVED_KEXTS      (1 << 9)
+#define CSR_ALLOW_EXECUTABLE_POLICY_OVERRIDE    (1 << 10)
+ 
+/* CSR capabilities that a booter can give to the system */
+#define CSR_CAPABILITY_UNLIMITED                                (1 << 0)
+#define CSR_CAPABILITY_CONFIG                                   (1 << 1)
+#define CSR_CAPABILITY_APPLE_INTERNAL                   (1 << 2)
 
 // this is the FDT v17 header, but xnu doesn't use it
 typedef struct {

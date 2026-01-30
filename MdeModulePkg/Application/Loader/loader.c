@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2025 Zoe Knox <zoe@pixin.net>
+ * Copyright (C) 2025-2026 Zoe Knox <zoe@pixin.net>
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -22,7 +22,7 @@
 
 #include "loader.h"
 
-#define VERSION_STR UEFI_STR("v0.5 IN DEVELOPMENT")
+#define VERSION_STR UEFI_STR("v0.6 IN DEVELOPMENT")
 #define KERNEL_LOAD_ADDRESS 0x100000; // 1 MB
 
 EFI_GUID gEfiDtbTableGuid = {0xb1b621d5, 0xf19c, 0x41a5, \
@@ -31,6 +31,8 @@ EFI_GUID gEfiAcpiTableGuid = EFI_ACPI_20_TABLE_GUID;
 EFI_GUID gEfiSmbios3TableGuid = SMBIOS3_TABLE_GUID;
 EFI_GUID gEfiSmbiosTableGuid = SMBIOS_TABLE_GUID;
 EFI_GUID gEfiRngProtocolGuid = EFI_RNG_PROTOCOL_GUID;
+
+CHAR8 cmdLine[1024];
 
 EFI_STATUS GetVideoInfo(VIDEO_INFO *v1, VIDEO_BOOT *v)
 {
@@ -48,13 +50,13 @@ EFI_STATUS GetVideoInfo(VIDEO_INFO *v1, VIDEO_BOOT *v)
         mode->FrameBufferSize / MB, mode->FrameBufferBase);
 
     v1->baseAddr = mode->FrameBufferBase;
-    v1->display = 1;
+    v1->display = GRAPHICS_MODE;
     v1->bytesPerRow = info->PixelsPerScanLine * 4; // UEFI only has RGBA, BGRA, or mono
     v1->width = info->HorizontalResolution;
     v1->height = info->VerticalResolution;
     v1->depth = 4;
 
-    v->display = 1;
+    v->display = GRAPHICS_MODE;
     v->bytesPerRow = info->PixelsPerScanLine * 4;
     v->width = info->HorizontalResolution;
     v->height = info->VerticalResolution;
@@ -70,14 +72,7 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
     EFI_STATUS Status;
     EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs;
     EFI_FILE_HANDLE Root, KernelFile;
-    struct mach_header_64 *MachHeader = (VOID *)ARGS_ADDR;
-
-    //Status = gBS->AllocatePages(AllocateAny, EfiLoaderData,
-    //    EFI_SIZE_TO_PAGES(16384), (EFI_PHYSICAL_ADDRESS *)MachHeader);
-    //if(EFI_ERROR(Status)) {
-    //    Print(UEFI_STR("Failed to allocate memory: %r\n"), Status);
-    //    return Status;
-    //}
+    struct mach_header_64 *MachHeader = (VOID *)MH_ADDR;
 
     Status = gBS->LocateProtocol(&gEfiSimpleFileSystemProtocolGuid, NULL, (VOID**)&Fs);
     if (EFI_ERROR(Status))
@@ -87,7 +82,7 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
     if (EFI_ERROR(Status))
         return Status;
 
-    Status = Root->Open(Root, &KernelFile, UEFI_STR("kernel"), EFI_FILE_MODE_READ, 0);
+    Status = Root->Open(Root, &KernelFile, UEFI_STR("\\ravynOS\\kernel"), EFI_FILE_MODE_READ, 0);
     if (EFI_ERROR(Status)) {
         Root->Close(Root);
         return Status;
@@ -225,8 +220,51 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable)
     FdtCreateNode(DTB, "/efi", "platform");
     FdtSetProperty(DTB, "/efi/platform", "apple-coprocessor-version", &val, 4);
     FdtSetProperty(DTB, "/efi/platform", "boot-chime-on-last-boot", &val, 4);
-    
+
+    UINT64 val64 = 133000000;
+    FdtSetProperty(DTB, "/efi/platform", "FSBFrequency", &val64, 8); // FIXME: get from ACPI?
+    val64 = 24000000;
+    FdtSetProperty(DTB, "/efi/platform", "ARTFrequency", &val64, 8); // FIXME: read actual ART
+
+    // Read the TSC and give xnu a suggestion
+    UINT32 low, high;
+    asm("       rdtsc; \
+                movl %%eax, %0; \
+                movl %%edx, %1;"
+        : "=m"(low), "=m"(high) : : "eax", "edx" );
+
+    val64 = high;
+    val64 <<= 32;
+    val64 |= low;
+    FdtSetProperty(DTB, "/efi/platform", "InitialTSC", &val64, 8);
+
     return DTB;
+}
+
+VOID LoadConfigFile(VOID)
+{
+    CHAR8 rawConfig[EFI_PAGE_SIZE];
+    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs;
+    EFI_FILE_HANDLE Root, cfgFile;
+
+    if(EFI_ERROR(gBS->LocateProtocol(&gEfiSimpleFileSystemProtocolGuid, NULL, (VOID**)&Fs)))
+        return;
+
+    if(EFI_ERROR(Fs->OpenVolume(Fs, &Root)))
+        return;
+
+    if(EFI_ERROR(Root->Open(Root, &cfgFile, UEFI_STR("\\ravynOS\\com.ravynos.boot.plist"), EFI_FILE_MODE_READ, 0))) {
+        Root->Close(Root);
+        return;
+    }
+
+    UINT64 size = EFI_PAGE_SIZE;
+    cfgFile->Read(cfgFile, &size, &rawConfig);
+    cfgFile->Close(cfgFile);
+    Root->Close(Root);
+
+    CopyMem(cmdLine, rawConfig, size > 1024 ? 1024 : size);
+    return;
 }
 
 EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
@@ -244,11 +282,12 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     UINT8 *region = NULL;
 
     gST->ConOut->ClearScreen(gST->ConOut);
-    Print(UEFI_STR(":: ravynOS EFI Loader %s\n\n"), VERSION_STR);
+    Print(UEFI_STR(":: ravynOS EFI Loader %s\n"), VERSION_STR);
+    LoadConfigFile();
 
-        Status = gBS->GetMemoryMap(&MemoryMapSize, MemoryMap, &MapKey, &DescriptorSize, &DescriptorVersion);
+    Status = gBS->GetMemoryMap(&MemoryMapSize, MemoryMap, &MapKey, &DescriptorSize, &DescriptorVersion);
     if (Status == EFI_BUFFER_TOO_SMALL) {
-        MemoryMap = AllocatePool(MemoryMapSize);
+        MemoryMap = (EFI_MEMORY_DESCRIPTOR *)MMAP_ADDR;
         Status = gBS->GetMemoryMap(&MemoryMapSize, MemoryMap, &MapKey, &DescriptorSize, &DescriptorVersion);
     }
     if (EFI_ERROR(Status)) {
@@ -312,45 +351,46 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     if (EFI_ERROR(Status))
         return Status;
 
-    BOOT_ARGS *BootArgs = (BOOT_ARGS *)(ARGS_ADDR - (4*EFI_PAGE_SIZE));
+    BOOT_ARGS *BootArgs = (BOOT_ARGS *)(KernelBuffer + KernelSize);
     SetMem(BootArgs, sizeof(BOOT_ARGS), 0);
+    UINT32 ps = EFI_PAGE_SIZE - 1;
+    KernelSize += (sizeof(BOOT_ARGS) + ps) & ~ps; // pad and align
+
+    // Rebase the efi tables to the end of boot args
+    VOID *p = KernelBuffer + KernelSize;
+    KernelSize += (SystemTable->Hdr.HeaderSize + ps) & ~ps; // pad and align
+    CopyMem(p, SystemTable, SystemTable->Hdr.HeaderSize);
+    CopyMem(p + SystemTable->Hdr.HeaderSize, SystemTable->RuntimeServices, SystemTable->RuntimeServices->Hdr.HeaderSize);
+    EFI_SYSTEM_TABLE *st = ((EFI_SYSTEM_TABLE *)p);
+    st->RuntimeServices = (EFI_RUNTIME_SERVICES *)((UINT64)(p + SystemTable->Hdr.HeaderSize) | 0xffffff8000000000);
+    st->Hdr.CRC32 = 0;
+    gBS->CalculateCrc32(&st->Hdr, st->Hdr.HeaderSize, &st->Hdr.CRC32);
 
     BootArgs->Version = 2;
     BootArgs->EFIMode = 64;
-    BootArgs->Flags = kBootArgsFlagHiDPI;
-    AsciiStrCpyS(BootArgs->CommandLine, 1024, "-v -s debug=1 diagnostic_api=1");
+    BootArgs->Flags = kBootArgsFlagCSRActiveConfig | kBootArgsFlagCSRConfigMode | kBootArgsFlagCSRBoot;
+    AsciiStrCpyS(BootArgs->CommandLine, 1024, cmdLine); 
     BootArgs->VideoV1 = videoV1;
     BootArgs->DeviceTree = (UINTN)DTB;
     BootArgs->DeviceTreeLength = DTBLength;
     BootArgs->kaddr = KERNEL_LOAD_ADDRESS;
     BootArgs->ksize = KernelSize;
     BootArgs->kslide = 0;
-    BootArgs->efiRuntimeServicesPageStart = (UINT32)((UINT64)(SystemTable->RuntimeServices));
-    UINT32 size = SystemTable->RuntimeServices->Hdr.HeaderSize - sizeof(EFI_TABLE_HEADER);
+    BootArgs->efiRuntimeServicesPageStart = (UINT32)((UINT64)p + SystemTable->Hdr.HeaderSize);
+    UINT32 size = SystemTable->RuntimeServices->Hdr.HeaderSize;
     UINT32 pages = size / EFI_PAGE_SIZE + 1;
     BootArgs->efiRuntimeServicesPageCount = pages;
-    BootArgs->efiRuntimeServicesVirtualPageStart = (UINT64)(SystemTable->RuntimeServices);
-    BootArgs->efiSystemTable = (UINT32)((UINT64)SystemTable);
-    BootArgs->perfDataStart = 0; // I think this should point to the llvm sections in __DATA
-    BootArgs->perfDataSize = 0;
-    BootArgs->keystoreDataStart = 0;
+    BootArgs->efiRuntimeServicesVirtualPageStart = BootArgs->efiRuntimeServicesPageStart | 0xffffff8000000000;
+    BootArgs->efiSystemTable = (UINT32)((UINT64)p);
+    BootArgs->keystoreDataStart = 0; // phys addr of keystore data for iokit
     BootArgs->keystoreDataSize = 0;
-    BootArgs->bootMemStart = 0; // is this the addr of this loader? of bootservices?
-    BootArgs->bootMemSize = 0;
     BootArgs->Video = video;
-
-    // BootArgs->FSBFreq = no idea what it should be
-    // BootArgs->pciConfigSpaceBaseAddr = 
-    // BootArgs->pciConfigSpaceStartBusNumber = 
-    // BootArgs->pciConfigSpaceEndBusNumber =
-    // BootArgs->csrActiveConfig = 
-    // BootArgs->csrCapabilities =
-    // BootArgs->boot_smc_plimit =
-    // BootArgs->bootProgressMeterStart =
-    // BootArgs->bootProgressMeterEnd =    
-    // BootArgs->APFSDataStart =
-    // BootArgs->APFSDataSize =
-
+    BootArgs->csrActiveConfig = CSR_ALLOW_UNTRUSTED_KEXTS | CSR_ALLOW_UNRESTRICTED_FS |
+                                CSR_ALLOW_KERNEL_DEBUGGER | CSR_ALLOW_APPLE_INTERNAL |
+                                CSR_ALLOW_UNRESTRICTED_DTRACE | CSR_ALLOW_UNRESTRICTED_NVRAM |
+                                CSR_ALLOW_DEVICE_CONFIGURATION | CSR_ALLOW_ANY_RECOVERY_OS |
+                                CSR_ALLOW_UNAPPROVED_KEXTS;
+    BootArgs->csrCapabilities = CSR_CAPABILITY_UNLIMITED | CSR_CAPABILITY_CONFIG | CSR_CAPABILITY_APPLE_INTERNAL;
     BootArgs->MemoryMap = (UINT32)((UINT64)MemoryMap);
     BootArgs->MemoryMapSize = MemoryMapSize;
     BootArgs->MemoryMapDescriptorSize = DescriptorSize;
@@ -364,8 +404,10 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     asm(
         "movq %0, %%rax\n"
         "movq %1, %%rdi\n"
+        "movq %2, %%rsp\n"
+        "movq %%rsp, %%rbp\n"
         "jmpq *%%rdi\n"
-        : : "mr"(BootArgs), "r"(KernelEntry) : "rax", "rdi"
+        : : "mr"(BootArgs), "r"(KernelEntry), "r"(bootStackTop) : "rax", "rdi"
     );
 
     return EFI_SUCCESS;

@@ -270,7 +270,7 @@ FdtNode *FdtCreateEmpty(VOID)
     FdtNode node = {1, 0}; // 1 prop, no children
     FdtProperty prop = {"name", 4};
 
-    CHAR8 *root = (CHAR8 *)ARGS_ADDR - 8 * EFI_PAGE_SIZE;
+    CHAR8 *root = (CHAR8 *)DTB_ADDR;
     SetMem(root, sizeof(node)+sizeof(prop)+4, 0);
     CopyMem(root, &node, sizeof(node));
     CopyMem(root+sizeof(node), &prop, sizeof(prop));

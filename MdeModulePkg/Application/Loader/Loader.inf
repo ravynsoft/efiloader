@@ -1,7 +1,7 @@
 ## @file
 #  Bare-bones UEFI bootloader for ravynOS XNU kernel
 #
-#  Copyright (c) 2025 Zoe Knox. All rights reserved.
+#  Copyright (c) 2025-2026 Zoe Knox. All rights reserved.
 #
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
 ##
