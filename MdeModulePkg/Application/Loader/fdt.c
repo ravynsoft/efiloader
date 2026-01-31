@@ -23,6 +23,8 @@
 #include "loader.h"
 #include <sys/cdefs.h>
 
+UINT32 DTBLength;
+
 CHAR8 *_fastForward(CHAR8 *ptr);
 CHAR8* gEnd = 0;
 
@@ -35,18 +37,6 @@ STATIC UINT32 FdtReadU32(CHAR8 *p)
 }
 
 #if defined(DEBUG)
-STATIC VOID PrintIndent(UINTN level)
-{
-    for(UINTN i = 0; i < level; i++)
-        Print(UEFI_STR("  "));
-}
-
-STATIC VOID FdtWriteU32(CHAR8 *p, UINT32 v)
-{
-    // v = SwapBytes32(v);
-    CopyMem(p, &v, 4);
-}
-
 STATIC BOOLEAN _isprint(const CHAR8 ch)
 {
     if((ch >= 0x20 && ch < 0x7f))
@@ -54,7 +44,7 @@ STATIC BOOLEAN _isprint(const CHAR8 ch)
     return FALSE;
 }
 
-STATIC VOID dumpHex(CHAR8 *addr, UINTN size, const CHAR8 *source) 
+VOID dumpHex(CHAR8 *addr, UINTN size, const CHAR8 *source) 
 {
     int index = 0;
     Print(L"DUMPHEX %a %p %x", source, addr, size);
@@ -233,6 +223,7 @@ EFI_STATUS FdtSetProperty(FdtNode *root, CHAR8 *NodePath, CHAR8 *Name, VOID *Dat
 
     incProps((FdtNode *)node);
     gEnd += propSize;
+    DTBLength += propSize;
 
     return EFI_SUCCESS;
 }
@@ -262,6 +253,7 @@ EFI_STATUS FdtCreateNode(FdtNode *root, CHAR8 *ParentPath, CHAR8 *Name)
 
     incChildren(cur);
     gEnd += newsize;
+    DTBLength += newsize;
     return EFI_SUCCESS;
 }
 
@@ -275,6 +267,7 @@ FdtNode *FdtCreateEmpty(VOID)
     CopyMem(root, &node, sizeof(node));
     CopyMem(root+sizeof(node), &prop, sizeof(prop));
     gEnd = root + sizeof(node) + sizeof(prop) + 4;
+    DTBLength = gEnd - root;
 
     return (FdtNode *)root;
 }

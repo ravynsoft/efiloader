@@ -33,6 +33,7 @@ EFI_GUID gEfiSmbiosTableGuid = SMBIOS_TABLE_GUID;
 EFI_GUID gEfiRngProtocolGuid = EFI_RNG_PROTOCOL_GUID;
 
 CHAR8 cmdLine[1024];
+extern UINT32 DTBLength;
 
 EFI_STATUS GetVideoInfo(VIDEO_INFO *v1, VIDEO_BOOT *v)
 {
@@ -271,6 +272,10 @@ VOID LoadConfigFile(VOID)
     return;
 }
 
+#ifdef DEBUG
+VOID dumpHex(CHAR8 *addr, UINTN size, const CHAR8 *source);
+#endif
+
 EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
 {
     EFI_STATUS Status;
@@ -345,16 +350,16 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
         }
     }
 
-    UINT32 DTBLength = 0;
     if(ACPI != 0)
-        DTBLength = BuildDTBFromACPI(ACPI, DTB);
-    Print(UEFI_STR("[] Created device tree at 0x%p\n"), DTB);
+        BuildDTBFromACPI(ACPI, DTB);
+    Print(UEFI_STR("[] Created device tree at 0x%p (%d bytes)\n"), DTB, DTBLength);
 
     LoadDrivers(ImageHandle);
     Status = LoadKernel(&KernelBuffer, &KernelEntry, &KernelSize);
     if (EFI_ERROR(Status))
         return Status;
 
+    /* boot args go right after the kernel */
     BOOT_ARGS *BootArgs = (BOOT_ARGS *)(KernelBuffer + KernelSize);
     SetMem(BootArgs, sizeof(BOOT_ARGS), 0);
     BootArgs->Version = 2;
@@ -366,25 +371,29 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     UINT32 ps = EFI_PAGE_SIZE - 1;
     KernelSize += (sizeof(BOOT_ARGS) + ps) & ~ps; // pad and align
 
-    // Rebase the efi tables to the end of boot args
+    // Rebase the efi tables and fdt to the end of boot args
     VOID *p = KernelBuffer + KernelSize;
     CopyMem(p, SystemTable, SystemTable->Hdr.HeaderSize);
     CopyMem(p + SystemTable->Hdr.HeaderSize, SystemTable->RuntimeServices, SystemTable->RuntimeServices->Hdr.HeaderSize);
 
     EFI_SYSTEM_TABLE *st = ((EFI_SYSTEM_TABLE *)p);
-    st->RuntimeServices = (EFI_RUNTIME_SERVICES *)((UINT64)(p + SystemTable->Hdr.HeaderSize) | 0xffffff8000000000);
+    st->RuntimeServices = (EFI_RUNTIME_SERVICES *)VMADDR(p + SystemTable->Hdr.HeaderSize);
     st->Hdr.CRC32 = 0;
     gBS->CalculateCrc32(&st->Hdr, st->Hdr.HeaderSize, &st->Hdr.CRC32);
-    BootArgs->efiSystemTable = (UINT32)((UINT64)st);
+    BootArgs->efiSystemTable = PHYSADDR(st);
+    KernelSize += SystemTable->Hdr.HeaderSize + SystemTable->RuntimeServices->Hdr.HeaderSize;
 
-    KernelSize += (SystemTable->Hdr.HeaderSize + SystemTable->RuntimeServices->Hdr.HeaderSize + ps) & ~ps;
+    p = KernelBuffer + KernelSize;
+    CopyMem(p, DTB, DTBLength);
+    KernelSize += DTBLength;
+    DTB = p;
 
-    BootArgs->DeviceTree = (UINTN)DTB;
+    BootArgs->DeviceTree = VMADDR(DTB);
     BootArgs->DeviceTreeLength = DTBLength;
     BootArgs->kaddr = KERNEL_LOAD_ADDRESS;
     BootArgs->ksize = KernelSize;
     BootArgs->kslide = 0;
-    BootArgs->efiRuntimeServicesPageStart = (UINT32)((UINT64)st->RuntimeServices);
+    BootArgs->efiRuntimeServicesPageStart = PHYSADDR(st->RuntimeServices);
     UINT32 size = SystemTable->RuntimeServices->Hdr.HeaderSize;
     UINT32 pages = size / EFI_PAGE_SIZE + 1;
     BootArgs->efiRuntimeServicesPageCount = pages;
@@ -398,7 +407,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
                                 CSR_ALLOW_DEVICE_CONFIGURATION | CSR_ALLOW_ANY_RECOVERY_OS |
                                 CSR_ALLOW_UNAPPROVED_KEXTS;
     BootArgs->csrCapabilities = CSR_CAPABILITY_UNLIMITED | CSR_CAPABILITY_CONFIG | CSR_CAPABILITY_APPLE_INTERNAL;
-    BootArgs->MemoryMap = (UINT32)((UINT64)MemoryMap);
+    BootArgs->MemoryMap = PHYSADDR(MemoryMap);
     BootArgs->MemoryMapSize = MemoryMapSize;
     BootArgs->MemoryMapDescriptorSize = DescriptorSize;
     BootArgs->MemoryMapDescriptorVersion = DescriptorVersion;
@@ -411,8 +420,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     asm(
         "movq %0, %%rax\n"
         "movq %1, %%rdi\n"
-        "movq %2, %%rsp\n"
-        "movq %%rsp, %%rbp\n"
+        "movq %2, %%rbp\n"
         "jmpq *%%rdi\n"
         : : "mr"(BootArgs), "r"(KernelEntry), "r"(bootStackTop) : "rax", "rdi"
     );

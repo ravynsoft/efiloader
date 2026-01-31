@@ -22,6 +22,7 @@
 
 #include "loader.h"
 UINT64 bootStackTop = 0;
+EFI_GUID gEfiCpuArchProtocolGuid = EFI_CPU_ARCH_PROTOCOL_GUID;
 
 UINT64 readULEB128(const UINT8 **p, const UINT8 *end)
 {
@@ -84,6 +85,10 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
     UINT32 kernelTop = 0, kernelBase = 0;
     struct mach_header_64 *mh_exec_hdr = 0;
     int size = 0;
+
+    EFI_CPU_ARCH_PROTOCOL *cpu = 0;
+    gBS->LocateProtocol(&gEfiCpuArchProtocolGuid, NULL, (VOID **)&cpu);
+
     uint32_t offset = sizeof(struct mach_header_64);
     for(int i = 0; i < mh->ncmds; ++i) {
         const struct load_command *lc = (const struct load_command *)((UINT64)mh + offset);
@@ -99,6 +104,8 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
 #endif
                 if(ls->vmsize == 0)
                     break;
+                else if(!StrCmp(segname, UEFI_STR("__LINKEDIT")))
+                    kernelTop = PHYSADDR(ls->vmaddr) + ls->vmsize;
 
                 struct section_64 *lsect = 
                     (struct section_64 *)((UINT64)(((UINT64)ls) + sizeof(struct segment_command_64)));
@@ -116,15 +123,13 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
                         else if(!StrCmp(sectname, UEFI_STR("__data")))
                             bootStackTop = lsect->addr;
                         else if(!StrCmp(sectname, UEFI_STR("__bootPT")))
-                            kernelBase = lsect->addr;
+                            kernelBase = PHYSADDR(lsect->addr);
                     } else if(!StrCmp(segname, UEFI_STR("__TEXT")) && !StrCmp(sectname, UEFI_STR("__text")))
-                        mh_exec_hdr = (struct mach_header_64 *)((ls->vmaddr) & 0xffffffff);
-                    else if(!StrCmp(segname, UEFI_STR("__LAST")) && !StrCmp(sectname, UEFI_STR("__last")))
-                        kernelTop = lsect->addr;
+                        mh_exec_hdr = (struct mach_header_64 *)((UINTN)PHYSADDR(ls->vmaddr));
 
                     EFI_STATUS Status = EFI_SUCCESS;
                     if(lsect->size) {
-                        VOID *physaddr = (VOID *)(lsect->addr & 0xffffffff);
+                        VOID *physaddr = (VOID *)((UINTN)PHYSADDR(lsect->addr));
                         UINTN align = 1;
                         for(int x = 0; x < lsect->align; ++x) align *= 2;
                         --align;
@@ -133,15 +138,25 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
                         SetMem(physaddr, size, 0);
                         if(EFI_ERROR(Status))
                             Print(UEFI_STR("!! ERROR %r\n"), Status);
-                        if((UINTN)physaddr != (lsect->addr & 0xffffffff))
+                        if((UINTN)physaddr != PHYSADDR(lsect->addr))
                             Print(UEFI_STR("!! ERROR physaddr != lsect->addr\n"));
 
                         Status = KernelFile->SetPosition(KernelFile, lsect->offset);
                         size = lsect->size;
                         Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)physaddr);
+
+#ifdef VMPROT
+                        // apply vm protection flags
+                        if(cpu) {
+                            Status = cpu->SetMemoryAttributes(cpu, lsect->addr, lsect->size, ls->initprot);
+                            Print(UEFI_STR("!! DEBUG protected %x len %d to %x (%r)\n"), lsect->addr, lsect->size,
+                                ls->initprot, Status);
+                        } else
+                            Print(UEFI_STR("!! ERROR cannot set memory protection flags!\n"));
+#endif
                     }
                     if(EFI_ERROR(Status))
-                        Print(UEFI_STR("!! Error: failed to read kernel data!\n"));
+                        Print(UEFI_STR("!! ERROR: failed to read kernel data!\n"));
                     lsect = (struct section_64 *)((UINT64)lsect + sizeof(struct section_64));
                 }
                 break;

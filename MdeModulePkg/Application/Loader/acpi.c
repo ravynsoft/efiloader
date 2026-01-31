@@ -156,7 +156,7 @@ UINTN parseAPIC(ACPI_APIC *apic, VOID *DTB)
     return 0;
 }
 
-UINTN BuildDTBFromACPI(VOID *ACPI, VOID *DTB)
+VOID BuildDTBFromACPI(VOID *ACPI, VOID *DTB)
 {
     ACPI_RSDP *rsdp = ACPI;
     ACPI_SDT_HEADER *sdt = (ACPI_SDT_HEADER *)(rsdp->XSDT ? rsdp->XSDT : rsdp->RSDT);
@@ -180,6 +180,4 @@ UINTN BuildDTBFromACPI(VOID *ACPI, VOID *DTB)
         if(entsize == 8)
             entry++;
     }
-
-    return ((FDT_HDR *)DTB)->totalsize;
 }

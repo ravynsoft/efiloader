@@ -47,6 +47,8 @@
 #include <Library/PrintLib.h>
 #include <Protocol/SimpleFileSystem.h>
 #include <Protocol/Rng.h>
+#include <Protocol/Cpu.h>
+#include <Guid/MemoryAttributesTable.h>
 #include <Guid/SmBios.h>
 #include <Guid/Acpi.h>
 
@@ -58,6 +60,7 @@ extern EFI_GUID gEfiAcpiTableGuid;
 extern EFI_GUID gEfiSmbios3TableGuid;
 extern EFI_GUID gEfiSmbiosTableGuid;
 extern EFI_GUID gEfiRngProtocolGuid;
+extern EFI_GUID gEfiCpuArchProtocolGuid;
 extern UINT64 bootStackTop;
 
 #define UEFI_STR(s) ((CHAR16 *)u##s)
@@ -81,21 +84,28 @@ extern UINT64 bootStackTop;
 #define GRAPHICS_MODE         1
 #define FB_TEXT_MODE          2
 
+#define KERNEL_VMA_BASE 0xffffff8000000000
+#define PHYSADDR(x) ((UINT32)((UINTN)x & 0xffffffff))
+#define VMADDR(x) ((UINT64)(((UINTN)x) | KERNEL_VMA_BASE))
+
 #define MH_ADDR     0x5000000   // 80 MB - where we stash mach_header while loading
-#define ARGS_ADDR   0x44000     // where we stash boot args
-#define DTB_ADDR    0x14000     // where we stash FDT
+#define ARGS_ADDR   0x44000     // where we stash boot args for initial load
+#define DTB_ADDR    0x14000     // where we stash FDT during construction
 #define MMAP_ADDR   0x10000     // location of EFI memory map
 
-/*  Memory layout of our boot data
+/*  Memory layout of our boot data heading into kernel entry
+ *  Data is loaded as above then remapped.
  *   +---------------+
- *   |  kernel base  |
+ *   |   EFI tables  |
+ *   +---------------+
+ *   |   boot args   |
+ *   +---------------+
+ *   |    kernel     |
  *   +---------------+ 0x191000
- *   |  boot args    |   .. 4 pages
- *   +---------------+ 0x24000
  *   |  device tree  |
- *   +---------------+ 0x14000
- *   |  mem map      |   .. 4 pages
- *   +---------------+ 0x10000
+ *   +---------------+  0x14000
+ *   |    mem map    |
+ *   +---------------+  0x10000
  */
 
 typedef struct {
@@ -219,7 +229,7 @@ UINT64 readULEB128(const UINT8 **p, const UINT8 *end);
 INT64 readSLEB128(const UINT8 **p, const UINT8 *end);
 int mapSegments(struct mach_header_64 *mh, UINTN *entry, EFI_FILE_HANDLE KernelFile);
 
-UINTN BuildDTBFromACPI(VOID *ACPI, VOID *DTB);
+VOID BuildDTBFromACPI(VOID *ACPI, VOID *DTB);
 
 FdtNode *FdtCreateEmpty(VOID);
 EFI_STATUS FdtCreateNode(FdtNode *root, CHAR8 *ParentPath, CHAR8 *Name);
