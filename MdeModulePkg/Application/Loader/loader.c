@@ -1,4 +1,6 @@
 /*
+ * EFI OS Loader for ravynOS XNU
+ *
  * Copyright (C) 2025-2026 Zoe Knox <zoe@pixin.net>
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -169,7 +171,7 @@ INT32 CompareGUIDs(EFI_GUID guid1, EFI_GUID guid2)
 }
 
 #define SET_BUFFER(x) CopyMem(buffer, x, AsciiStrSize(x))
-FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable)
+FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable, UINTN addr)
 {
     EFI_STATUS Status;
     UINT8 buffer[256];
@@ -178,7 +180,7 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable)
     UINT32 val;
     EFI_RNG_PROTOCOL *RNG = 0;
 
-    FdtNode *DTB = FdtCreateEmpty();
+    FdtNode *DTB = FdtCreateEmpty(addr);
     if(!DTB)
         return NULL;
 
@@ -194,6 +196,10 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable)
     FdtCreateNode(DTB, "/", "chosen");
     FdtSetProperty(DTB, "/chosen", "random-seed", entropy, ENTROPY_SIZE);
     FdtCreateNode(DTB, "/chosen", "memory-map");
+
+    /* Final virtual address of the FDT (DTB) - used by IOKit startup. */
+    FdtSetProperty(DTB, "/chosen/memory-map", "DeviceTree", &DTB, sizeof(UINTN));
+
     FdtCreateNode(DTB, "/chosen", "osenvironment");
     FdtCreateNode(DTB, "/chosen", "ephemeral-storage");
     FdtCreateNode(DTB, "/chosen", "use-recovery-securityd");
@@ -304,8 +310,6 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
         return Status;
     }
 
-    DTB = InitDTB(SystemTable);
-
     for(region = (UINT8 *)MemoryMap; region < ((UINT8 *)MemoryMap + MemoryMapSize); region += DescriptorSize) {
         switch(((EFI_MEMORY_DESCRIPTOR *)region)->Type) {
             case EfiConventionalMemory:
@@ -319,9 +323,12 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     }
     Print(UEFI_STR("\n[] Memory: %u MB usable\n"), physPages * EFI_PAGE_SIZE / MB);
 
-    VIDEO_INFO videoV1 = {0};
-    VIDEO_BOOT video = {0};
-    GetVideoInfo(&videoV1, &video);
+    LoadDrivers(ImageHandle);
+    Status = LoadKernel(&KernelBuffer, &KernelEntry, &KernelSize);
+    if (EFI_ERROR(Status))
+        return Status;
+
+    DTB = InitDTB(SystemTable, (UINTN)KernelBuffer + KernelSize);
 
     EFI_CONFIGURATION_TABLE *table = SystemTable->ConfigurationTable;
     CHAR8 buffer[128], buffer2[128];
@@ -354,24 +361,17 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
         BuildDTBFromACPI(ACPI, DTB);
     Print(UEFI_STR("[] Created device tree at 0x%p (%d bytes)\n"), DTB, DTBLength);
 
-    LoadDrivers(ImageHandle);
-    Status = LoadKernel(&KernelBuffer, &KernelEntry, &KernelSize);
-    if (EFI_ERROR(Status))
-        return Status;
-
-    /* boot args go right after the kernel */
+    /* Pad the DTB up to the next page boundary
+     * Boot args go right after the DTB
+     */
+    UINT32 ps = EFI_PAGE_SIZE - 1;
+    KernelSize += (DTBLength + ps) & ~ps;
+    
     BOOT_ARGS *BootArgs = (BOOT_ARGS *)(KernelBuffer + KernelSize);
     SetMem(BootArgs, sizeof(BOOT_ARGS), 0);
-    BootArgs->Version = 2;
-    BootArgs->EFIMode = 64;
-    BootArgs->Flags = kBootArgsFlagCSRActiveConfig | kBootArgsFlagCSRConfigMode | kBootArgsFlagCSRBoot;
-    AsciiStrCpyS(BootArgs->CommandLine, 1024, cmdLine); 
-    BootArgs->VideoV1 = videoV1;
-
-    UINT32 ps = EFI_PAGE_SIZE - 1;
     KernelSize += (sizeof(BOOT_ARGS) + ps) & ~ps; // pad and align
 
-    // Rebase the efi tables and fdt to the end of boot args
+    // Rebase the efi tables to the end of boot args
     VOID *p = KernelBuffer + KernelSize;
     CopyMem(p, SystemTable, SystemTable->Hdr.HeaderSize);
     CopyMem(p + SystemTable->Hdr.HeaderSize, SystemTable->RuntimeServices, SystemTable->RuntimeServices->Hdr.HeaderSize);
@@ -383,11 +383,15 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     BootArgs->efiSystemTable = PHYSADDR(st);
     KernelSize += SystemTable->Hdr.HeaderSize + SystemTable->RuntimeServices->Hdr.HeaderSize;
 
-    p = KernelBuffer + KernelSize;
-    CopyMem(p, DTB, DTBLength);
-    KernelSize += DTBLength;
-    DTB = p;
+    VIDEO_INFO videoV1 = {0};
+    VIDEO_BOOT video = {0};
+    GetVideoInfo(&videoV1, &video);
 
+    BootArgs->Version = 2;
+    BootArgs->EFIMode = 64;
+    BootArgs->Flags = kBootArgsFlagCSRActiveConfig | kBootArgsFlagCSRConfigMode | kBootArgsFlagCSRBoot;
+    AsciiStrCpyS(BootArgs->CommandLine, 1024, cmdLine); 
+    BootArgs->VideoV1 = videoV1;
     BootArgs->DeviceTree = VMADDR(DTB);
     BootArgs->DeviceTreeLength = DTBLength;
     BootArgs->kaddr = KERNEL_LOAD_ADDRESS;

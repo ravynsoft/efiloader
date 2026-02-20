@@ -95,15 +95,15 @@ extern UINT64 bootStackTop;
 
 /*  Memory layout of our boot data heading into kernel entry
  *  Data is loaded as above then remapped.
- *   +---------------+
+ *   +---------------+ + EFI tables size
  *   |   EFI tables  |
- *   +---------------+
+ *   +---------------+ + boot args size
  *   |   boot args   |
- *   +---------------+
+ *   +---------------+ + DT size
+ *   |  device tree  |
+ *   +---------------+ + kernel size
  *   |    kernel     |
  *   +---------------+ 0x191000
- *   |  device tree  |
- *   +---------------+  0x14000
  *   |    mem map    |
  *   +---------------+  0x10000
  */
@@ -225,13 +225,14 @@ typedef struct {
 #define BIND_TYPE_THREADED_BIND 100
 #define BIND_TYPE_THREADED_REBASE 102
 
+
 UINT64 readULEB128(const UINT8 **p, const UINT8 *end);
 INT64 readSLEB128(const UINT8 **p, const UINT8 *end);
 int mapSegments(struct mach_header_64 *mh, UINTN *entry, EFI_FILE_HANDLE KernelFile);
 
 VOID BuildDTBFromACPI(VOID *ACPI, VOID *DTB);
 
-FdtNode *FdtCreateEmpty(VOID);
+FdtNode *FdtCreateEmpty(UINTN address);
 EFI_STATUS FdtCreateNode(FdtNode *root, CHAR8 *ParentPath, CHAR8 *Name);
 EFI_STATUS FdtSetProperty(FdtNode *root, CHAR8 *NodePath, CHAR8 *Name, VOID *Data, UINT32 Len);
 CHAR8 *FdtGetProperty(FdtNode *root, CHAR8 *NodePtr, CHAR8 *Name, UINT32 *OutLen);

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2025 Zoe Knox <zoe@pixin.net>
+ * Copyright (C) 2025-2026 Zoe Knox <zoe@pixin.net>
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -257,12 +257,12 @@ EFI_STATUS FdtCreateNode(FdtNode *root, CHAR8 *ParentPath, CHAR8 *Name)
     return EFI_SUCCESS;
 }
 
-FdtNode *FdtCreateEmpty(VOID)
+FdtNode *FdtCreateEmpty(UINTN addr)
 {
     FdtNode node = {1, 0}; // 1 prop, no children
     FdtProperty prop = {"name", 4};
 
-    CHAR8 *root = (CHAR8 *)DTB_ADDR;
+    CHAR8 *root = (CHAR8 *)addr;
     SetMem(root, sizeof(node)+sizeof(prop)+4, 0);
     CopyMem(root, &node, sizeof(node));
     CopyMem(root+sizeof(node), &prop, sizeof(prop));
