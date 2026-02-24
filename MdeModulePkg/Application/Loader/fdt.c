@@ -271,3 +271,8 @@ FdtNode *FdtCreateEmpty(UINTN addr)
 
     return (FdtNode *)root;
 }
+
+EFI_STATUS FdtSetStringProperty(FdtNode *root, CHAR8 *NodePath, CHAR8 *Name, CHAR8 *Data)
+{
+    return FdtSetProperty(root, NodePath, Name, Data, AsciiStrSize(Data));
+}

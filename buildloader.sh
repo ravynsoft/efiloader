@@ -7,7 +7,7 @@ echo "---------------------------------"
 # Mangle the architecture into what EDK uses
 MACHINE=$(uname -m)
 OPSYS=$(uname -s)
-_SDK=${SDK:-/Library/Developer/ravynOS.sdk}
+_SDK=${SDK:-/Library/Developer/Platforms/ravynOS.platform/Developer/SDKs/ravynOS.sdk}
 export CPATH=${_SDK}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers:${_SDK}/usr/include
 
 case ${OPSYS} in

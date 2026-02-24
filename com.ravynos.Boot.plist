@@ -1,1 +1,1 @@
--v -s debug=0x08 dart=0x1F -enable_x86_64h
+-v -s io=0x4E57FFFF iotrace=0x8FFFF dk=0xC11F debug=0x0C -enable_x86_64h

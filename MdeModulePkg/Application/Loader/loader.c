@@ -23,9 +23,12 @@
  */
 
 #include "loader.h"
+#include "lzvn_decode.h"
+#include <mach-o/fat.h>
 
-#define VERSION_STR UEFI_STR("v0.6 IN DEVELOPMENT")
-#define KERNEL_LOAD_ADDRESS 0x100000; // 1 MB
+#define VERSION_STR UEFI_STR("v0.7 IN DEVELOPMENT")
+#define KERNEL_LOAD_ADDRESS 0x100000 // 1 MB
+#define DTB_PAGES 4 /* max size of temporary DTB in pages */
 
 EFI_GUID gEfiDtbTableGuid = {0xb1b621d5, 0xf19c, 0x41a5, \
         {0x83, 0x0b, 0xd9, 0x15, 0x2c, 0x69, 0xaa, 0xe0}};
@@ -85,24 +88,81 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
     if (EFI_ERROR(Status))
         return Status;
 
-    Status = Root->Open(Root, &KernelFile, UEFI_STR("\\ravynOS\\kernel"), EFI_FILE_MODE_READ, 0);
+    Status = Root->Open(Root, &KernelFile, UEFI_STR("\\ravynOS\\kernelcache"), EFI_FILE_MODE_READ, 0);
     if (EFI_ERROR(Status)) {
         Root->Close(Root);
         return Status;
     }
 
-    UINT64 size = sizeof(struct mach_header_64);
+    UINT64 size = 1*KB;
     Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)MachHeader);
-    if(EFI_ERROR(Status) 
-        || MachHeader->filetype != MH_EXECUTE
-        || (MachHeader->cputype != CPU_TYPE_X86_64 && MachHeader->cputype != (unsigned)CPU_TYPE_ANY))
-    {
-        if(EFI_ERROR(Status))
-            Print(UEFI_STR("Read Error: %r\n"), Status);
-        else {
-            Print(UEFI_STR("Incorrect Mach file header\n"));
-            Status = EFI_UNSUPPORTED;
+    if(EFI_ERROR(Status)) {
+        Print(UEFI_STR("Read Error: %r\n"), Status);
+        return Status;
+    }
+
+    /* Is this a kernelcache fat binary or a raw kernel? */
+    int isFat = 0, nSlice = 0, swapBytes = 0;
+    if(MachHeader->magic == FAT_CIGAM) {
+	nSlice = SwapBytes32(((struct fat_header *)MachHeader)->nfat_arch);
+	isFat = 1;
+	swapBytes = 1;
+    } else if(MachHeader->magic == FAT_MAGIC) {
+	nSlice = ((struct fat_header *)MachHeader)->nfat_arch;
+	isFat = 1;
+    }
+
+    if(isFat) {
+	int foundX86 = -1;
+        Print(UEFI_STR("\n:: Mach-O fat binary [%d slices].\n"), nSlice);
+	for(int i = 0; i < nSlice; ++i) {
+            struct fat_arch *arch = (struct fat_arch *)((CHAR8 *)MachHeader +
+		       sizeof(struct fat_header) + i*sizeof(struct fat_arch));
+
+	    UINT32 length = swapBytes ? SwapBytes32(arch->size) : arch->size;
+	    UINT32 offset = swapBytes ? SwapBytes32(arch->offset) : arch->offset;
+	    UINT32 align = swapBytes ? SwapBytes32(arch->align) : arch->align;
+	    align = 1 << align;
+	    UINT32 cputype = swapBytes ? SwapBytes32(arch->cputype) : arch->cputype;
+	    
+	    Print(UEFI_STR("    [%a] offset %d length %d align %d\n"),
+		  cputype == CPU_TYPE_X86_64 ? "x86-64" :
+		  cputype == CPU_TYPE_ARM64 ? "arm64" : "unknown", offset, length, align);
+	    
+	    if(cputype == CPU_TYPE_X86_64) {
+		foundX86 = offset;
+	    }
+	}
+
+	if(foundX86 >= 0) { /* we found the arch we need .. skip to its header */
+	    Status = KernelFile->SetPosition(KernelFile, foundX86);
+            size = sizeof(struct mach_header_64);
+            Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)MachHeader);
+	} else {
+	    Print(UEFI_STR("!! Error: No executable for this architecture\n"));
+	}
+    }
+
+    if(MachHeader->magic == 0x706d6f63 /* comp */) {
+	Print(UEFI_STR("    IMG4 container using %c%c%c%c\n"),
+	      (MachHeader->cputype & 0xff),
+	      (MachHeader->cputype & 0xff00) >> 8,
+	      (MachHeader->cputype & 0xff0000) >> 16,
+	      (MachHeader->cputype & 0xff000000) >> 24);
+	Status = EFI_UNSUPPORTED;
+    }
+
+    if(MachHeader->magic == MH_MAGIC_64) {
+        if(MachHeader->filetype != MH_EXECUTE || (MachHeader->cputype != CPU_TYPE_X86_64
+            && MachHeader->cputype != (unsigned)CPU_TYPE_ANY)) {
+                Status = EFI_UNSUPPORTED;
         }
+    } else {
+	Status = EFI_UNSUPPORTED;
+    }
+    
+    if(EFI_ERROR(Status)) {
+        Print(UEFI_STR("!! Error: Incorrect or unsupported Mach file header\n"));
         return Status;
     }
 
@@ -193,21 +253,30 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable, UINTN addr)
     FdtCreateNode(DTB, "/", "cpus");
     FdtCreateNode(DTB, "/", "memory");
 
-    FdtCreateNode(DTB, "/", "chosen");
+    FdtCreateNode(DTB, "/", "options"); /* IODTPlane:/options */
+
+    FdtCreateNode(DTB, "/", "chosen"); /* IODTPlane:/chosen */
     FdtSetProperty(DTB, "/chosen", "random-seed", entropy, ENTROPY_SIZE);
     FdtCreateNode(DTB, "/chosen", "memory-map");
 
-    /* Final virtual address of the FDT (DTB) - used by IOKit startup. */
-    FdtSetProperty(DTB, "/chosen/memory-map", "DeviceTree", &DTB, sizeof(UINTN));
+    struct {
+      UINT32 start;
+      UINT32 end;
+    } fdtmap = { PHYSADDR(addr), PHYSADDR(addr) + DTB_PAGES*EFI_PAGE_SIZE };
+    FdtSetProperty(DTB, "/chosen/memory-map", "DeviceTree", &fdtmap, sizeof(fdtmap));
 
     FdtCreateNode(DTB, "/chosen", "osenvironment");
     FdtCreateNode(DTB, "/chosen", "ephemeral-storage");
     FdtCreateNode(DTB, "/chosen", "use-recovery-securityd");
-
+    FdtSetProperty(DTB, "/chosen", "booter-name", "loader.efi", 11);
+    FdtSetProperty(DTB, "/chosen", "boot-file", "\\ravynOS\\kernelcache", 21);
+ 
     val = 1024;
     FdtCreateNode(DTB, "/", "defaults");
     FdtSetProperty(DTB, "/defaults", "kern.max_task_pmem", &val, 4);
-    
+    val = 4; /* VM_PAGER_COMPRESSOR_WITH_SWAP: Active in-core compressor with swap backend */
+    FdtSetProperty(DTB, "/defaults", "kern.vm_compressor", &val, 4);
+
     FdtCreateNode(DTB, "/", "efi");
     FdtSetProperty(DTB, "/efi", "firmware-revision", &SystemTable->FirmwareRevision, 4);
     FdtSetProperty(DTB, "/efi", "firmware-vendor", SystemTable->FirmwareVendor, StrSize(SystemTable->FirmwareVendor));
@@ -228,10 +297,9 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable, UINTN addr)
     FdtSetProperty(DTB, "/efi/runtime-services/configuration-table", "name", buffer, AsciiStrSize((char *)buffer));
 
     val = 0;
-    FdtCreateNode(DTB, "/efi", "platform");
+    FdtCreateNode(DTB, "/efi", "platform"); /* IODTPlane:/efi/platform */
     FdtSetProperty(DTB, "/efi/platform", "apple-coprocessor-version", &val, 4);
     FdtSetProperty(DTB, "/efi/platform", "boot-chime-on-last-boot", &val, 4);
-
     val64 = 133000000;
     FdtSetProperty(DTB, "/efi/platform", "FSBFrequency", &val64, 8); // FIXME: get from ACPI?
     val64 = 24000000;
@@ -248,6 +316,19 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable, UINTN addr)
     val64 <<= 32;
     val64 |= low;
     FdtSetProperty(DTB, "/efi/platform", "InitialTSC", &val64, 8);
+
+    // set up the root nub for IOKit
+    FdtSetProperty(DTB, "/efi/platform", "model", UEFI_STR("MacBookPro16,1"), 30);
+    FdtSetProperty(DTB, "/efi/platform", "SystemSerialNumber", UEFI_STR("E1234FFF0001"), 26);
+    FdtSetStringProperty(DTB, "/efi/platform", "compatible", "IOService");
+    FdtSetStringProperty(DTB, "/efi/platform", "IOClass", "AppleI386GenericPlatform");
+    FdtSetStringProperty(DTB, "/efi/platform", "IOProviderClass", "IOPlatformExpertDevice");
+    FdtSetStringProperty(DTB, "/efi/platform", "IOPath", "IODeviceTree:/efi/platform");
+    FdtSetStringProperty(DTB, "/efi/platform", "IOName", "platform");
+    val = 1;
+    FdtSetProperty(DTB, "/efi/platform", "DevicePathsSupported", &val, 4);
+    //FdtSetStringProperty(DTB, "/efi/platform", "IOPlatformUUID",
+    //			 "XXXXXXX what goes here? XXXXXX");
 
     return DTB;
 }
@@ -361,17 +442,15 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
         BuildDTBFromACPI(ACPI, DTB);
     Print(UEFI_STR("[] Created device tree at 0x%p (%d bytes)\n"), DTB, DTBLength);
 
-    /* Pad the DTB up to the next page boundary
-     * Boot args go right after the DTB
-     */
+    /* Pad the DTB up to its maximum size. Boot args follow the DTB. */
     UINT32 ps = EFI_PAGE_SIZE - 1;
-    KernelSize += (DTBLength + ps) & ~ps;
+    KernelSize += DTB_PAGES * EFI_PAGE_SIZE;
     
     BOOT_ARGS *BootArgs = (BOOT_ARGS *)(KernelBuffer + KernelSize);
     SetMem(BootArgs, sizeof(BOOT_ARGS), 0);
     KernelSize += (sizeof(BOOT_ARGS) + ps) & ~ps; // pad and align
 
-    // Rebase the efi tables to the end of boot args
+    // Relocate the efi tables to the end of boot args
     VOID *p = KernelBuffer + KernelSize;
     CopyMem(p, SystemTable, SystemTable->Hdr.HeaderSize);
     CopyMem(p + SystemTable->Hdr.HeaderSize, SystemTable->RuntimeServices, SystemTable->RuntimeServices->Hdr.HeaderSize);
@@ -410,7 +489,8 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
                                 CSR_ALLOW_UNRESTRICTED_DTRACE | CSR_ALLOW_UNRESTRICTED_NVRAM |
                                 CSR_ALLOW_DEVICE_CONFIGURATION | CSR_ALLOW_ANY_RECOVERY_OS |
                                 CSR_ALLOW_UNAPPROVED_KEXTS;
-    BootArgs->csrCapabilities = CSR_CAPABILITY_UNLIMITED | CSR_CAPABILITY_CONFIG | CSR_CAPABILITY_APPLE_INTERNAL;
+    BootArgs->csrCapabilities = CSR_CAPABILITY_UNLIMITED | CSR_CAPABILITY_CONFIG |
+                                CSR_CAPABILITY_APPLE_INTERNAL;
     BootArgs->MemoryMap = PHYSADDR(MemoryMap);
     BootArgs->MemoryMapSize = MemoryMapSize;
     BootArgs->MemoryMapDescriptorSize = DescriptorSize;

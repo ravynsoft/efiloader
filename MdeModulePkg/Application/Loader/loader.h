@@ -99,7 +99,7 @@ extern UINT64 bootStackTop;
  *   |   EFI tables  |
  *   +---------------+ + boot args size
  *   |   boot args   |
- *   +---------------+ + DT size
+ *   +---------------+ + DTB_PAGES * EFI_PAGE_SIZE
  *   |  device tree  |
  *   +---------------+ + kernel size
  *   |    kernel     |
@@ -238,5 +238,6 @@ EFI_STATUS FdtSetProperty(FdtNode *root, CHAR8 *NodePath, CHAR8 *Name, VOID *Dat
 CHAR8 *FdtGetProperty(FdtNode *root, CHAR8 *NodePtr, CHAR8 *Name, UINT32 *OutLen);
 CHAR8 *FdtFindNode(FdtNode *root, CHAR8 *Path);
 VOID FdtDump(FdtNode *root);
+EFI_STATUS FdtSetStringProperty(FdtNode *root, CHAR8 *NodePath, CHAR8 *Name, CHAR8 *Data);
 
 #endif // __LOADER_H
