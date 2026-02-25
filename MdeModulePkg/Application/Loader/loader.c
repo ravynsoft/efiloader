@@ -37,6 +37,8 @@ EFI_GUID gEfiSmbios3TableGuid = SMBIOS3_TABLE_GUID;
 EFI_GUID gEfiSmbiosTableGuid = SMBIOS_TABLE_GUID;
 EFI_GUID gEfiRngProtocolGuid = EFI_RNG_PROTOCOL_GUID;
 
+VOID dumpHex(CHAR8 *addr, UINTN size, const CHAR8 *source);
+
 CHAR8 cmdLine[1024];
 extern UINT32 DTBLength;
 
@@ -112,6 +114,7 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
 	isFat = 1;
     }
 
+    UINT32 slicelen = 0;
     if(isFat) {
 	int foundX86 = -1;
         Print(UEFI_STR("\n:: Mach-O fat binary [%d slices].\n"), nSlice);
@@ -131,6 +134,7 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
 	    
 	    if(cputype == CPU_TYPE_X86_64) {
 		foundX86 = offset;
+		slicelen = length;
 	    }
 	}
 
@@ -143,13 +147,25 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
 	}
     }
 
-    if(MachHeader->magic == 0x706d6f63 /* comp */) {
-	Print(UEFI_STR("    IMG4 container using %c%c%c%c\n"),
-	      (MachHeader->cputype & 0xff),
-	      (MachHeader->cputype & 0xff00) >> 8,
-	      (MachHeader->cputype & 0xff0000) >> 16,
-	      (MachHeader->cputype & 0xff000000) >> 24);
-	Status = EFI_UNSUPPORTED;
+    /* These are big endian */
+    if(MachHeader->magic == 0x706d6f63 /* comp */
+       && MachHeader->cputype == 0x6e767a6c /* lzvn */) {
+	UINTN dstaddr = 0;
+	Status = gBS->AllocatePages(AllocateAnyPages, EfiLoaderData,
+				    slicelen/EFI_PAGE_SIZE, &dstaddr);
+	if(EFI_ERROR(Status))
+	    Print(UEFI_STR("!! Error: failed to allocate memory to decompress! %r\n"), Status);
+	
+	Print(UEFI_STR("    LZVN compressed IMG4 - decompressing to %p... "), (VOID *)dstaddr);
+	
+	UINTN bytes = lzvn_decode((VOID *)dstaddr, slicelen,
+				  (VOID *)MachHeader, slicelen);
+	Print(UEFI_STR("%d bytes\n"), bytes);
+
+	dumpHex((CHAR8 *)dstaddr, 8192, "decompressed kernel");
+
+	if(bytes)
+	    CopyMem(MachHeader, (VOID *)dstaddr, bytes);
     }
 
     if(MachHeader->magic == MH_MAGIC_64) {
