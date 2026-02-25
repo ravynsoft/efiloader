@@ -12,7 +12,7 @@
   MODULE_UNI_FILE                = loader.uni
   FILE_GUID                      = 6987936E-ED34-44db-AE97-1FA5E4ED2116
   MODULE_TYPE                    = UEFI_APPLICATION
-  VERSION_STRING                 = 0.5
+  VERSION_STRING                 = 0.7
   ENTRY_POINT                    = UefiMain
   UEFI_HII_RESOURCE_SECTION      = TRUE
 
@@ -21,6 +21,8 @@
   macho.c
   acpi.c
   fdt.c
+  lzvn_decode.c
+  yyjson.c
 
 [Packages]
   MdePkg/MdePkg.dec
