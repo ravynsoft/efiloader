@@ -20,8 +20,6 @@
  * THE SOFTWARE.
  */
 
-#define DEBUG_LOADER 1
-
 #include "loader.h"
 UINT64 bootStackTop = 0;
 EFI_GUID gEfiCpuArchProtocolGuid = EFI_CPU_ARCH_PROTOCOL_GUID;

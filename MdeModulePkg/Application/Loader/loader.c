@@ -37,8 +37,6 @@ EFI_GUID gEfiSmbios3TableGuid = SMBIOS3_TABLE_GUID;
 EFI_GUID gEfiSmbiosTableGuid = SMBIOS_TABLE_GUID;
 EFI_GUID gEfiRngProtocolGuid = EFI_RNG_PROTOCOL_GUID;
 
-VOID dumpHex(CHAR8 *addr, UINTN size, const CHAR8 *source);
-
 CHAR8 cmdLine[1024];
 extern UINT32 DTBLength;
 
@@ -422,10 +420,6 @@ VOID LoadConfigFile(VOID)
     CopyMem(cmdLine, rawConfig, size > 1024 ? 1024 : size);
     return;
 }
-
-#ifdef DEBUG
-VOID dumpHex(CHAR8 *addr, UINTN size, const CHAR8 *source);
-#endif
 
 EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
 {
