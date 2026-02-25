@@ -200,6 +200,7 @@ uint32_t yyjson_version(void) {
 #    include <sys/types.h> /* POSIX */
 #endif
 #if yyjson_has_include(<endian.h>)
+#    define __ENDIAN__ 1
 #    include <endian.h> /* Linux */
 #elif yyjson_has_include(<sys/endian.h>)
 #    include <sys/endian.h> /* BSD, Android */
