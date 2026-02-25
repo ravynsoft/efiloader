@@ -114,7 +114,6 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
 	isFat = 1;
     }
 
-    UINT32 slicelen = 0;
     if(isFat) {
 	int foundX86 = -1;
         Print(UEFI_STR("\n:: Mach-O fat binary [%d slices].\n"), nSlice);
@@ -132,10 +131,8 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
 		  cputype == CPU_TYPE_X86_64 ? "x86-64" :
 		  cputype == CPU_TYPE_ARM64 ? "arm64" : "unknown", offset, length, align);
 	    
-	    if(cputype == CPU_TYPE_X86_64) {
+	    if(cputype == CPU_TYPE_X86_64)
 		foundX86 = offset;
-		slicelen = length;
-	    }
 	}
 
 	if(foundX86 >= 0) { /* we found the arch we need .. skip to its header */
@@ -144,30 +141,77 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
             Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)MachHeader);
 	} else {
 	    Print(UEFI_STR("!! Error: No executable for this architecture\n"));
+	    return EFI_UNSUPPORTED;
 	}
-    }
 
-    /* These are big endian */
-    if(MachHeader->magic == 0x706d6f63 /* comp */
-       && MachHeader->cputype == 0x6e767a6c /* lzvn */) {
-	UINTN dstaddr = 0;
-	Status = gBS->AllocatePages(AllocateAnyPages, EfiLoaderData,
-				    slicelen/EFI_PAGE_SIZE, &dstaddr);
-	if(EFI_ERROR(Status))
-	    Print(UEFI_STR("!! Error: failed to allocate memory to decompress! %r\n"), Status);
+	UINT32 magic = swapBytes
+	  ? SwapBytes32(MachHeader->magic)
+	  : MachHeader->magic;
 	
-	Print(UEFI_STR("    LZVN compressed IMG4 - decompressing to %p... "), (VOID *)dstaddr);
+	if(magic == 0x636f6d70 /* comp */) {
+	  char scheme[4];
+	  UINTN dstaddr = 0;
+	  PrelinkedKernelHeader *pkh = (PrelinkedKernelHeader *)MachHeader;
+	  UINT32 comptype = swapBytes
+	    ? SwapBytes32(pkh->compressType)
+	    : pkh->compressType;
+	  CopyMem(scheme, &comptype, 4);
+
+	  UINT32 compsize, uncompsize, version, crc;
+	  compsize = swapBytes
+	    ? SwapBytes32(pkh->compressedSize)
+	    : pkh->compressedSize;
+	  uncompsize = swapBytes
+	    ? SwapBytes32(pkh->uncompressedSize)
+	    : pkh->uncompressedSize;
+	  version = swapBytes
+	    ? SwapBytes32(pkh->prelinkVersion)
+	    : pkh->prelinkVersion;
+	  crc = swapBytes
+	    ? SwapBytes32(pkh->adler32)
+	    : pkh->adler32;
+
+	  Print(UEFI_STR("\nPrelinked kernel v%d, %d bytes %c%c%c%c compressed, CRC %08x\n"),
+		version, compsize, scheme[3], scheme[2],
+		scheme[1], scheme[0], crc);
+
+	  size = foundX86 + sizeof(PrelinkedKernelHeader);
+	  Status = KernelFile->SetPosition(KernelFile, (UINTN)size);
+	  size = compsize;
+	  Status |= KernelFile->Read(KernelFile, (UINTN *)&size,
+				     (EFI_PHYSICAL_ADDRESS *)MachHeader);
+	  if(EFI_ERROR(Status)) {
+	    Print(UEFI_STR("!! Error: failed to read kernel image! %r\n"), Status);
+	    return Status;
+	  }
+	  
+	  if(comptype != 0x6c7a766e /* lzvn */) {
+	    Print(UEFI_STR("!! Error: Unsupported compression scheme\n"));
+	    return EFI_UNSUPPORTED;
+	  }
 	
-	UINTN bytes = lzvn_decode((VOID *)dstaddr, slicelen,
-				  (VOID *)MachHeader, slicelen);
-	Print(UEFI_STR("%d bytes\n"), bytes);
+	  Status = gBS->AllocatePages(AllocateAnyPages, EfiLoaderData,
+				      uncompsize/EFI_PAGE_SIZE+1, &dstaddr);
+	  if(EFI_ERROR(Status)) {
+	    Print(UEFI_STR("!! Error: failed to allocate memory to decompress! %r\n"),Status);
+	    return Status;
+	  }
 
-	dumpHex((CHAR8 *)dstaddr, 8192, "decompressed kernel");
+	  Print(UEFI_STR("Decompressing IMG4 to %p... "), (VOID *)dstaddr);
+	  lzvn_decoder_state state = {0};
+	  state.src = (VOID *)MachHeader;
+	  state.src_end = (VOID *)MachHeader + compsize;
+	  state.dst = (VOID *)dstaddr;
+	  state.dst_begin = (VOID *)dstaddr;
+	  state.dst_end = (VOID *)dstaddr + uncompsize;
 
-	if(bytes)
-	    CopyMem(MachHeader, (VOID *)dstaddr, bytes);
-    }
-
+	  lzvn_decode(&state);
+	  Print(UEFI_STR("%d bytes\n"), uncompsize);
+	  /* Save the uncompressed buffer address for mapping segments */
+	  MachHeader = (struct mach_header_64 *)dstaddr;
+        }
+    } /* fat binary */
+    
     if(MachHeader->magic == MH_MAGIC_64) {
         if(MachHeader->filetype != MH_EXECUTE || (MachHeader->cputype != CPU_TYPE_X86_64
             && MachHeader->cputype != (unsigned)CPU_TYPE_ANY)) {
@@ -187,15 +231,19 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
         MachHeader->cputype == CPU_TYPE_X86_64 ? UEFI_STR("x86-64") : UEFI_STR("i386"),
         MachHeader->flags, MachHeader->ncmds, MachHeader->sizeofcmds);
 
-    size += MachHeader->sizeofcmds;
-    KernelFile->SetPosition(KernelFile, 0);
-    Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)MachHeader);
+    Status = EFI_SUCCESS;
+    *KernelBuffer = (VOID *)KERNEL_LOAD_ADDRESS;
 
-    if(!EFI_ERROR(Status)) {
-        *KernelBuffer = (VOID *)KERNEL_LOAD_ADDRESS;
+    if(isFat) { /* we've already read and decompressed a fat binary */
+      *KernelSize = mapDecompressedSegments(MachHeader, KernelEntry);
+    } else { /* bare kernel image */
+      size += MachHeader->sizeofcmds;
+      KernelFile->SetPosition(KernelFile, 0);
+      Status = KernelFile->Read(KernelFile, &size, (EFI_PHYSICAL_ADDRESS *)MachHeader);
+      if(!EFI_ERROR(Status))
         *KernelSize = mapSegments(MachHeader, KernelEntry, KernelFile);
     }
-
+    
     KernelFile->Close(KernelFile);
     Root->Close(Root);
     return Status;

@@ -229,6 +229,7 @@ typedef struct {
 UINT64 readULEB128(const UINT8 **p, const UINT8 *end);
 INT64 readSLEB128(const UINT8 **p, const UINT8 *end);
 int mapSegments(struct mach_header_64 *mh, UINTN *entry, EFI_FILE_HANDLE KernelFile);
+int mapDecompressedSegments(struct mach_header_64 *mh, UINTN *KernelEntry);
 
 VOID BuildDTBFromACPI(VOID *ACPI, VOID *DTB);
 

@@ -23,6 +23,8 @@
 #include "loader.h"
 #include <sys/cdefs.h>
 
+#define DEBUG 1
+
 UINT32 DTBLength;
 
 CHAR8 *_fastForward(CHAR8 *ptr);
@@ -51,7 +53,7 @@ VOID dumpHex(CHAR8 *addr, UINTN size, const CHAR8 *source)
     for(int i = 0; i < size; ++i) {
         if(i == 0 || i % 16 == 0)
             Print(L"\n0x%08x: ", addr+i);
-        Print(L"%02x ", addr[i]);
+        Print(L"%02x ", addr[i] & 0xff);
         ++index;
         if(index == 16) {
             Print(L"\t");

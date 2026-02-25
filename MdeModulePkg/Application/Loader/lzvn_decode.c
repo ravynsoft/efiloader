@@ -1,552 +1,414 @@
 /*
- * Copyright (c) 2014 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2015-2016, Apple Inc. All rights reserved.
+ * Copyright (c) 2026 ravynOS Project. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
  *
- * Portions Copyright (c) 2003 Apple Computer, Inc.  All Rights
- * Reserved.  This file contains Original Code and/or Modifications of
- * Original Code as defined in and that are subject to the Apple Public
- * Source License Version 2.0 (the "License").  You may not use this file
- * except in compliance with the License.  Please obtain a copy of the
- * License at http://www.apple.com/publicsource and read it before using
- * this file.
+ * 1.  Redistributions of source code must retain the above copyright notice,
+ *     this list of conditions and the following disclaimer.
+ * 2.  Redistributions in binary form must reproduce the above copyright
+ *     notice, this list of conditions and the following disclaimer in the
+ *     documentation and/or other materials provided with the distribution.
+ * 3.  Neither the name of the copyright holder(s) nor the names of any
+ *     contributors may be used to endorse or promote products derived from
+ *     this software without specific prior written permission.
  *
- * The Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON- INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- *
- * @APPLE_LICENSE_HEADER_END@
- *
- * The lzvn_decode function was first located and disassembled by Pike R.
- * Alpha, after that Andy Vandijck wrote a little C program that called the
- * assembler code, which 'MinusZwei' converted to flat C code. And below 
- * you'll find my conversion of the assembler code, this time to a more 
- * traditional C-style format, to make it easier to understand.
- *
- * Thanks to Andy Vandijck and 'MinusZwei' for their hard work!
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <stdio.h>
-#include <string.h>
-
-#include <libkern/OSByteOrder.h>
-
-#define DEBUG_STATE_ENABLED		0
-
-#if DEBUG_STATE_ENABLED
-#define _LZVN_DEBUG_DUMP(x...)	printf(x)
-#else
-#define _LZVN_DEBUG_DUMP(x...)
-#endif
-
-#define LZVN_0		0
-#define LZVN_1		1
-#define LZVN_2		2
-#define LZVN_3		3
-#define LZVN_4		4
-#define LZVN_5		5
-#define LZVN_6		6
-#define LZVN_7		7
-#define LZVN_8		8
-#define LZVN_9		9
-#define LZVN_10		10
-#define LZVN_11		11
-
-#define CASE_TABLE	127
-
-//==============================================================================
-
-size_t lzvn_decode(void * decompressedData, size_t decompressedSize, void * compressedData, size_t compressedSize)
-{
-	const uint64_t decompBuffer = (const uint64_t)decompressedData;
-
-	size_t	length	= 0;															// xor	%rax,%rax
-
-	uint64_t compBuffer	= (uint64_t)compressedData;
-
-	uint64_t compBufferPointer	= 0;												// use p(ointer)?
-	uint64_t caseTableIndex	= 0;
-	uint64_t byteCount		= 0;
-	uint64_t currentLength	= 0;													// xor	%r12,%r12
-	uint64_t negativeOffset	= 0;
-	uint64_t address		= 0;													// ((uint64_t)compBuffer + compBufferPointer)
-
-	uint8_t jmpTo			= CASE_TABLE;											// On the first run!
-
-	// Example values:
-	//
-	// byteCount: 10,	negativeOffset: 28957,	length: 42205762, currentLength: 42205772, compBufferPointer: 42176805
-	// byteCount: 152,	negativeOffset: 28957,	length: 42205772, currentLength: 42205924, compBufferPointer: 42176815
-	// byteCount: 10,	negativeOffset: 7933,	length: 42205924, currentLength: 42205934, compBufferPointer: 42197991
-	// byteCount: 45,	negativeOffset: 7933,	length: 42205934, currentLength: 42205979, compBufferPointer: 42198001
-	// byteCount: 9,	negativeOffset: 64,		length: 42205979, currentLength: 42205988, compBufferPointer: 42205915
-	// byteCount: 10,	negativeOffset: 8180,	length: 42205988, currentLength: 42205998, compBufferPointer: 42197808
-	// byteCount: 59,	negativeOffset: 8180,	length: 42205998, currentLength: 42206057, compBufferPointer: 42197818
-	// byteCount: 10,	negativeOffset: 359,	length: 42206057, currentLength: 42206067, compBufferPointer: 42205698
-	// byteCount: 1,	negativeOffset: 359,	length: 42206067, currentLength: 42206068, compBufferPointer: 42205708
-	// byteCount: 10,	negativeOffset: 29021,	length: 42206068, currentLength: 42206078, compBufferPointer: 42177047
-	//
-	// length + byteCount = currentLength
-	// currentLength - (negativeOffset + byteCount) = compBufferPointer
-	// length - negativeOffset = compBufferPointer
-
-	static short caseTable[ 256 ] =
-	{
-		1,  1,  1,  1,    1,  1,  2,  3,    1,  1,  1,  1,    1,  1,  4,  3,
-		1,  1,  1,  1,    1,  1,  4,  3,    1,  1,  1,  1,    1,  1,  5,  3,
-		1,  1,  1,  1,    1,  1,  5,  3,    1,  1,  1,  1,    1,  1,  5,  3,
-		1,  1,  1,  1,    1,  1,  5,  3,    1,  1,  1,  1,    1,  1,  5,  3,
-		1,  1,  1,  1,    1,  1,  0,  3,    1,  1,  1,  1,    1,  1,  0,  3,
-		1,  1,  1,  1,    1,  1,  0,  3,    1,  1,  1,  1,    1,  1,  0,  3,
-		1,  1,  1,  1,    1,  1,  0,  3,    1,  1,  1,  1,    1,  1,  0,  3,
-		5,  5,  5,  5,    5,  5,  5,  5,    5,  5,  5,  5,    5,  5,  5,  5,
-		1,  1,  1,  1,    1,  1,  0,  3,    1,  1,  1,  1,    1,  1,  0,  3,
-		1,  1,  1,  1,    1,  1,  0,  3,    1,  1,  1,  1,    1,  1,  0,  3,
-		6,  6,  6,  6,    6,  6,  6,  6,    6,  6,  6,  6,    6,  6,  6,  6,
-		6,  6,  6,  6,    6,  6,  6,  6,    6,  6,  6,  6,    6,  6,  6,  6,
-		1,  1,  1,  1,    1,  1,  0,  3,    1,  1,  1,  1,    1,  1,  0,  3,
-		5,  5,  5,  5,    5,  5,  5,  5,    5,  5,  5,  5,    5,  5,  5,  5,
-		7,  8,  8,  8,    8,  8,  8,  8,    8,  8,  8,  8,    8,  8,  8,  8,
-		9, 10, 10, 10,   10, 10, 10, 10,   10, 10, 10, 10,   10, 10, 10, 10
-	};
-
-	decompressedSize -= 8;															// sub	$0x8,%rsi
-
-	if (decompressedSize < 8)														// jb	Llzvn_exit
-	{
-		return 0;
-	}
-
-	compressedSize = (compBuffer + compressedSize - 8);								// lea	-0x8(%rdx,%rcx,1),%rcx
-
-	if (compBuffer > compressedSize)												// cmp	%rcx,%rdx
-	{
-		return 0;																	// ja	Llzvn_exit
-	}
-
-	compBufferPointer = *(uint64_t *)compBuffer;									// mov	(%rdx),%r8
-	caseTableIndex = (compBufferPointer & 255);										// movzbq	(%rdx),%r9
-
-	do																				// jmpq	*(%rbx,%r9,8)
-	{
-		switch (jmpTo)																// our jump table
-		{
-			case CASE_TABLE: /******************************************************/
-
-				switch (caseTable[(uint8_t)caseTableIndex])
-				{
-					case 0: _LZVN_DEBUG_DUMP("caseTable[0]\n");
-
-							caseTableIndex >>= 6;									// shr	$0x6,%r9
-							compBuffer = (compBuffer + caseTableIndex + 1);			// lea	0x1(%rdx,%r9,1),%rdx
-						
-							if (compBuffer > compressedSize)						// cmp	%rcx,%rdx
-							{
-								return 0;											// ja	Llzvn_exit
-							}
-						
-							byteCount = 56;											// mov	$0x38,%r10
-							byteCount &= compBufferPointer;							// and	%r8,%r10
-							compBufferPointer >>= 8;								// shr	$0x8,%r8
-							byteCount >>= 3;										// shr	$0x3,%r10
-							byteCount += 3;											// add	$0x3,%r10
-						
-							jmpTo = LZVN_10;										// jmp	Llzvn_l10
-							break;
-						
-					case 1:	_LZVN_DEBUG_DUMP("caseTable[1]\n");
-
-							caseTableIndex >>= 6;									// shr	$0x6,%r9
-							compBuffer = (compBuffer + caseTableIndex + 2);			// lea	0x2(%rdx,%r9,1),%rdx
-
-							if (compBuffer > compressedSize)						// cmp	%rcx,%rdx
-							{
-								return 0;											// ja	Llzvn_exit
-							}
-						
-							negativeOffset = compBufferPointer;						// mov	%r8,%r12
-							negativeOffset = OSSwapInt64(negativeOffset);			// bswap	%r12
-							byteCount = negativeOffset;								// mov	%r12,%r10
-							negativeOffset <<= 5;									// shl	$0x5,%r12
-							byteCount <<= 2;										// shl	$0x2,%r10
-							negativeOffset >>= 53;									// shr	$0x35,%r12
-							byteCount >>= 61;										// shr	$0x3d,%r10
-							compBufferPointer >>= 16;								// shr	$0x10,%r8
-							byteCount += 3;											// add	$0x3,%r10
-
-							jmpTo = LZVN_10;										// jmp	Llzvn_l10
-							break;
-
-					case 2: _LZVN_DEBUG_DUMP("caseTable[2]\n");
-
-							return length;
-			
-					case 3: _LZVN_DEBUG_DUMP("caseTable[3]\n");
-
-							caseTableIndex >>= 6;									// shr	$0x6,%r9
-							compBuffer = (compBuffer + caseTableIndex + 3);			// lea	0x3(%rdx,%r9,1),%rdx
-
-							if (compBuffer > compressedSize)						// cmp	%rcx,%rdx
-							{
-								return 0;											// ja	Llzvn_exit
-							}
-						
-							byteCount = 56;											// mov	$0x38,%r10
-							negativeOffset = 65535;									// mov	$0xffff,%r12
-							byteCount &= compBufferPointer;							// and	%r8,%r10
-							compBufferPointer >>= 8;								// shr	$0x8,%r8
-							byteCount >>= 3;										// shr	$0x3,%r10
-							negativeOffset &= compBufferPointer;					// and	%r8,%r12
-							compBufferPointer >>= 16;								// shr	$0x10,%r8
-							byteCount += 3;											// add	$0x3,%r10
-						
-							jmpTo = LZVN_10;										// jmp	Llzvn_l10
-							break;
-						
-					case 4:	_LZVN_DEBUG_DUMP("caseTable[4]\n");
-
-							compBuffer++;											// add	$0x1,%rdx
-
-							if (compBuffer > compressedSize)						// cmp	%rcx,%rdx
-							{
-								return 0;											// ja	Llzvn_exit
-							}
-						
-							compBufferPointer = *(uint64_t *)compBuffer;			// mov	(%rdx),%r8
-							caseTableIndex = (compBufferPointer & 255);				// movzbq (%rdx),%r9
-						
-							jmpTo = CASE_TABLE;										// continue;
-							break;													// jmpq	*(%rbx,%r9,8)
-
-					case 5: _LZVN_DEBUG_DUMP("caseTable[5]\n");
-
-							return 0;												// Llzvn_table5;
-					
-					case 6: _LZVN_DEBUG_DUMP("caseTable[6]\n");
-
-							caseTableIndex >>= 3;									// shr	$0x3,%r9
-							caseTableIndex &= 3;									// and	$0x3,%r9
-							compBuffer = (compBuffer + caseTableIndex + 3);			// lea	0x3(%rdx,%r9,1),%rdx
-
-							if (compBuffer > compressedSize)						// cmp	%rcx,%rdx
-							{
-								return 0;											// ja	Llzvn_exit
-							}
-						
-							byteCount = compBufferPointer;							// mov	%r8,%r10
-							byteCount &= 775;										// and	$0x307,%r10
-							compBufferPointer >>= 10;								// shr	$0xa,%r8
-							negativeOffset = (byteCount & 255);						// movzbq %r10b,%r12
-							byteCount >>= 8;										// shr	$0x8,%r10
-							negativeOffset <<= 2;									// shl	$0x2,%r12
-							byteCount |= negativeOffset;							// or	%r12,%r10
-							negativeOffset = 16383;									// mov	$0x3fff,%r12
-							byteCount += 3;											// add	$0x3,%r10
-							negativeOffset &= compBufferPointer;					// and	%r8,%r12
-							compBufferPointer >>= 14;								// shr	$0xe,%r8
-
-							jmpTo = LZVN_10;										// jmp	Llzvn_l10
-							break;
-						
-					case 7:	_LZVN_DEBUG_DUMP("caseTable[7]\n");
-
-							compBufferPointer >>= 8;								// shr	$0x8,%r8
-							compBufferPointer &= 255;								// and	$0xff,%r8
-							compBufferPointer += 16;								// add	$0x10,%r8
-							compBuffer = (compBuffer + compBufferPointer + 2);		// lea	0x2(%rdx,%r8,1),%rdx
-
-							jmpTo = LZVN_0;											// jmp	Llzvn_l0
-							break;
-						
-					case 8: _LZVN_DEBUG_DUMP("caseTable[8]\n");
-
-							compBufferPointer &= 15;								// and	$0xf,%r8
-							compBuffer = (compBuffer + compBufferPointer + 1);		// lea	0x1(%rdx,%r8,1),%rdx
-						
-							jmpTo = LZVN_0;											// jmp	Llzvn_l0
-							break;
-					
-					case 9:	_LZVN_DEBUG_DUMP("caseTable[9]\n");
-
-							compBuffer += 2;										// add	$0x2,%rdx
-					
-							if (compBuffer > compressedSize)						// cmp	%rcx,%rdx
-							{
-								return 0;											// ja	Llzvn_exit
-							}
-
-							// Up most significant byte (count) by 16 (0x10/16 - 0x10f/271).
-							byteCount = compBufferPointer;							// mov	%r8,%r10
-							byteCount >>= 8;										// shr	$0x8,%r10
-							byteCount &= 255;										// and	$0xff,%r10
-							byteCount += 16;										// add	$0x10,%r10
-
-							jmpTo = LZVN_11;										// jmp	Llzvn_l11
-							break;
-
-					case 10:_LZVN_DEBUG_DUMP("caseTable[10]\n");
-
-							compBuffer++;											// add	$0x1,%rdx
-							
-							if (compBuffer > compressedSize)						// cmp	%rcx,%rdx
-							{
-								return 0;											// ja	Llzvn_exit
-							}
-						
-							byteCount = compBufferPointer;							// mov	%r8,%r10
-							byteCount &= 15;										// and	$0xf,%r10
-						
-							jmpTo = LZVN_11;										// jmp	Llzvn_l11
-							break;
-#if DEBUG_STATE_ENABLED
-					default:printf("default() caseTableIndex[%d]\n", (uint8_t)caseTableIndex);
-#endif
-				}																	// switch (caseTable[caseTableIndex])
-
-				break;
-
-			case LZVN_0: /**********************************************************/
-
-				_LZVN_DEBUG_DUMP("jmpTable(0)\n");
-
-				if (compBuffer > compressedSize)									// cmp	%rcx,%rdx
-				{
-					return 0;														// ja	Llzvn_exit
-				}
-				
-				currentLength = (length + compBufferPointer);						// lea	(%rax,%r8,1),%r11
-				compBufferPointer = -compBufferPointer;								// neg	%r8
-				
-				if (currentLength > decompressedSize)								// cmp	%rsi,%r11
-				{
-					jmpTo = LZVN_2;													// ja	Llzvn_l2
-					break;
-				}
-
-				currentLength = (decompBuffer + currentLength);						// lea	(%rdi,%r11,1),%r11
-
-			case LZVN_1: /**********************************************************/
-
-				do																	// Llzvn_l1:
-				{
-					_LZVN_DEBUG_DUMP("jmpTable(1)\n");
-
-//					caseTableIndex = *(uint64_t *)((uint64_t)compBuffer + compBufferPointer);
-
-					address = (compBuffer + compBufferPointer);						// mov	(%rdx,%r8,1),%r9
-					caseTableIndex = *(uint64_t *)address;
-
-//					*(uint64_t *)((uint64_t)currentLength + compBufferPointer) = caseTableIndex;
-// or:
-//					memcpy((void *)currentLength + compBufferPointer, &caseTableIndex, 8);
-// or:
-					address = (currentLength + compBufferPointer);					// mov	%r9,(%r11,%r8,1)
-					*(uint64_t *)address = caseTableIndex;
-					compBufferPointer += 8;											// add	$0x8,%r8
-
-				} while ((UINT64_MAX - (compBufferPointer - 8)) >= 8);				// jae	Llzvn_l1
-
-				length = currentLength;												// mov	%r11,%rax
-				length -= decompBuffer;												// sub	%rdi,%rax
-				
-				compBufferPointer = *(uint64_t *)compBuffer;						// mov	(%rdx),%r8
-				caseTableIndex = (compBufferPointer & 255);							// movzbq (%rdx),%r9
-
-				jmpTo = CASE_TABLE;
-				break;																// jmpq	*(%rbx,%r9,8)
-
-			case LZVN_2: /**********************************************************/
-
-				_LZVN_DEBUG_DUMP("jmpTable(2)\n");
-
-				currentLength = (decompressedSize + 8);								// lea	0x8(%rsi),%r11
-
-			case LZVN_3: /***********************************************************/
-
-				do																	// Llzvn_l3: (block copy of bytes)
-				{
-					_LZVN_DEBUG_DUMP("jmpTable(3)\n");
-
-					address = (compBuffer + compBufferPointer);						// movzbq (%rdx,%r8,1),%r9
-					caseTableIndex = (*((uint64_t *)address) & 255);
-					memcpy((void *)decompBuffer + length, &caseTableIndex, 1);
-					length++;														// add	$0x1,%rax
-					
-					if (currentLength == length)									// cmp	%rax,%r11
-					{
-						return length;												// je	Llzvn_exit2
-					}
-					
-					compBufferPointer++;											// add	$0x1,%r8
-					
-				} while ((int64_t)compBufferPointer != 0);							// jne	Llzvn_l3
-				
-				compBufferPointer = *(uint64_t *)compBuffer;						// mov	(%rdx),%r8
-				caseTableIndex = (compBufferPointer & 255);							// movzbq	(%rdx),%r9
-
-				jmpTo = CASE_TABLE;
-				break;																// jmpq	*(%rbx,%r9,8)
-
-			case LZVN_4: /**********************************************************/
-
-				_LZVN_DEBUG_DUMP("jmpTable(4)\n");
-
-				currentLength = (decompressedSize + 8);								// lea	0x8(%rsi),%r11
-
-			case LZVN_9: /**********************************************************/
-
-				do																	// Llzvn_l9: (block copy of bytes)
-				{
-					_LZVN_DEBUG_DUMP("jmpTable(9)\n");
-
-					address = (decompBuffer + compBufferPointer);					// movzbq (%rdi,%r8,1),%r9
-					caseTableIndex = (*((uint8_t *)address) & 255);
-
-					compBufferPointer++;											// add	$0x1,%r8
-					memcpy((void *)decompBuffer + length, &caseTableIndex, 1);		// mov	%r9,(%rdi,%rax,1)
-					length++;														// add	$0x1,%rax
-					
-					if (length == currentLength)									// cmp	%rax,%r11
-					{
-						return length;												// je	Llzvn_exit2
-					}
-
-					byteCount--;													// sub	$0x1,%r10
-					
-				} while (byteCount);												// jne	Llzvn_l9
-				
-				compBufferPointer = *(uint64_t *)compBuffer;						// mov	(%rdx),%r8
-				caseTableIndex = (compBufferPointer & 255);							// movzbq	(%rdx),%r9
-
-				jmpTo = CASE_TABLE;
-				break;																// jmpq	*(%rbx,%r9,8)
-
-			case LZVN_5: /**********************************************************/
-
-				do																	// Llzvn_l5: (block copy of qwords)
-				{
-					_LZVN_DEBUG_DUMP("jmpTable(5)\n");
-
-					address = (decompBuffer + compBufferPointer);					// mov	(%rdi,%r8,1),%r9
-					caseTableIndex = *((uint64_t *)address);
-
-					compBufferPointer += 8;											// add	$0x8,%r8
-					memcpy((void *)decompBuffer + length, &caseTableIndex, 8);		// mov	%r9,(%rdi,%rax,1)
-					length += 8;													// add	$0x8,%rax
-					byteCount -= 8;													// sub	$0x8,%r10
-					
-				} while ((byteCount + 8) > 8);										// ja	Llzvn_l5
-
-				length += byteCount;												// add	%r10,%rax
-				compBufferPointer = *(uint64_t *)compBuffer;						// mov	(%rdx),%r8
-				caseTableIndex = (compBufferPointer & 255);							// movzbq	(%rdx),%r9
-
-				jmpTo = CASE_TABLE;
-				break;																// jmpq	*(%rbx,%r9,8)
-
-			case LZVN_10: /*********************************************************/
-
-				_LZVN_DEBUG_DUMP("jmpTable(10)\n");
-
-				currentLength = (length + caseTableIndex);							// lea	(%rax,%r9,1),%r11
-				currentLength += byteCount;											// add	%r10,%r11
-
-				if (currentLength < decompressedSize)								// cmp	%rsi,%r11 (block_end: jae	Llzvn_l8)
-				{
-					memcpy((void *)decompBuffer + length, &compBufferPointer, 8);	// mov	%r8,(%rdi,%rax,1)
-					length += caseTableIndex;										// add	%r9,%rax
-					compBufferPointer = length;										// mov	%rax,%r8
-						
-					if (compBufferPointer < negativeOffset)							// jb	Llzvn_exit
-					{
-						return 0;
-					}
-
-					compBufferPointer -= negativeOffset;							// sub	%r12,%r8
-
-					if (negativeOffset < 8)											// cmp	$0x8,%r12
-					{
-						jmpTo = LZVN_4;												// jb	Llzvn_l4
-						break;
-					}
-
-					jmpTo = LZVN_5;													// jmpq	*(%rbx,%r9,8)
-					break;
-				}
-
-			case LZVN_8: /**********************************************************/
-
-				_LZVN_DEBUG_DUMP("jmpTable(8)\n");
-
-				if (caseTableIndex == 0)											// test	%r9,%r9
-				{
-					jmpTo = LZVN_7;													// jmpq	*(%rbx,%r9,8)
-					break;
-				}
-
-				currentLength = (decompressedSize + 8);								// lea	0x8(%rsi),%r11
-
-			case LZVN_6: /**********************************************************/
-
-				do
-				{
-					_LZVN_DEBUG_DUMP("jmpTable(6)\n");
-
-					memcpy((void *)decompBuffer + length, &compBufferPointer, 1);	// mov	%r8b,(%rdi,%rax,1)
-					length++;														// add	$0x1,%rax
-						
-					if (length == currentLength)									// cmp	%rax,%r11
-					{
-						return length;												// je	Llzvn_exit2
-					}
-						
-					compBufferPointer >>= 8;										// shr	$0x8,%r8
-					caseTableIndex--;												// sub	$0x1,%r9
-						
-				} while (caseTableIndex != 1);										// jne	Llzvn_l6
-
-			case LZVN_7: /**********************************************************/
-
-				_LZVN_DEBUG_DUMP("jmpTable(7)\n");
-
-				compBufferPointer = length;											// mov	%rax,%r8
-				compBufferPointer -= negativeOffset;								// sub	%r12,%r8
-
-				if (compBufferPointer < negativeOffset)								// jb	Llzvn_exit
-				{
-					return 0;
-				}
-
-				jmpTo = LZVN_4;
-				break;																// jmpq	*(%rbx,%r9,8)
-	
-			case LZVN_11: /*********************************************************/
-
-				_LZVN_DEBUG_DUMP("jmpTable(11)\n");
-
-				compBufferPointer = length;											// mov	%rax,%r8
-				compBufferPointer -= negativeOffset;								// sub	%r12,%r8
-				currentLength = (length + byteCount);								// lea	(%rax,%r10,1),%r11
-				
-				if (currentLength < decompressedSize)								// cmp	%rsi,%r11
-				{
-					if (negativeOffset >= 8)										// cmp	$0x8,%r12
-					{
-						jmpTo = LZVN_5;												// jae	Llzvn_l5
-						break;
-					}
-				}
-				
-				jmpTo = LZVN_4;														// jmp	Llzvn_l4
-				break;
-		}																			// switch (jmpq)
-
-	} while (1);
-
-	return 0;
+/* This is a slightly modified version of Apple's reference LZVN code, adapted
+ * to be used in the ravynOS bootloader (loader.efi)
+ */
+
+#include "lzvn_decode.h"
+
+//  Both the source and destination buffers are represented by a pointer and
+//  a length; they are *always* updated in concert using this macro; however
+//  many bytes the pointer is advanced, the length is decremented by the same
+//  amount. Thus, pointer + length always points to the byte one past the end
+//  of the buffer.
+#define PTR_LEN_INC(_pointer, _length, _increment)                             \
+  (_pointer += _increment, _length -= _increment)
+
+//  Update state with current positions and distance, corresponding to the
+//  beginning of an instruction in both streams
+#define UPDATE_GOOD                                                            \
+  (state->src = src_ptr, state->dst = dst_ptr, state->d_prev = D)
+
+void lzvn_decode(lzvn_decoder_state *state) {
+  // Jump table for all instructions
+  static const void *opc_tbl[256] = {
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&eos,   &&lrg_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&nop,   &&lrg_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&nop,   &&lrg_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&udef,  &&lrg_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&udef,  &&lrg_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&udef,  &&lrg_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&udef,  &&lrg_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&udef,  &&lrg_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&pre_d, &&lrg_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&pre_d, &&lrg_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&pre_d, &&lrg_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&pre_d, &&lrg_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&pre_d, &&lrg_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&pre_d, &&lrg_d,
+      &&udef,  &&udef,  &&udef,  &&udef,  &&udef,  &&udef,  &&udef,  &&udef,
+      &&udef,  &&udef,  &&udef,  &&udef,  &&udef,  &&udef,  &&udef,  &&udef,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&pre_d, &&lrg_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&pre_d, &&lrg_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&pre_d, &&lrg_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&pre_d, &&lrg_d,
+      &&med_d, &&med_d, &&med_d, &&med_d, &&med_d, &&med_d, &&med_d, &&med_d,
+      &&med_d, &&med_d, &&med_d, &&med_d, &&med_d, &&med_d, &&med_d, &&med_d,
+      &&med_d, &&med_d, &&med_d, &&med_d, &&med_d, &&med_d, &&med_d, &&med_d,
+      &&med_d, &&med_d, &&med_d, &&med_d, &&med_d, &&med_d, &&med_d, &&med_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&pre_d, &&lrg_d,
+      &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&sml_d, &&pre_d, &&lrg_d,
+      &&udef,  &&udef,  &&udef,  &&udef,  &&udef,  &&udef,  &&udef,  &&udef,
+      &&udef,  &&udef,  &&udef,  &&udef,  &&udef,  &&udef,  &&udef,  &&udef,
+      &&lrg_l, &&sml_l, &&sml_l, &&sml_l, &&sml_l, &&sml_l, &&sml_l, &&sml_l,
+      &&sml_l, &&sml_l, &&sml_l, &&sml_l, &&sml_l, &&sml_l, &&sml_l, &&sml_l,
+      &&lrg_m, &&sml_m, &&sml_m, &&sml_m, &&sml_m, &&sml_m, &&sml_m, &&sml_m,
+      &&sml_m, &&sml_m, &&sml_m, &&sml_m, &&sml_m, &&sml_m, &&sml_m, &&sml_m};
+
+  size_t src_len = state->src_end - state->src;
+  size_t dst_len = state->dst_end - state->dst;
+  if (src_len == 0 || dst_len == 0)
+    return; // empty buffer
+
+  const unsigned char *src_ptr = state->src;
+  unsigned char *dst_ptr = state->dst;
+  size_t D = state->d_prev;
+  size_t M;
+  size_t L;
+  size_t opc_len;
+
+  // Do we have a partially expanded match saved in state?
+  if (state->L != 0 || state->M != 0) {
+    L = state->L;
+    M = state->M;
+    D = state->D;
+    opc_len = 0; // we already skipped the op
+    state->L = state->M = state->D = 0;
+    if (M == 0)
+      goto copy_literal;
+    if (L == 0)
+      goto copy_match;
+    goto copy_literal_and_match;
+  }
+
+  unsigned char opc = src_ptr[0];
+
+  goto *opc_tbl[opc];
+
+//  ===============================================================
+//  These four opcodes (sml_d, med_d, lrg_d, and pre_d) encode both a
+//  literal and a match. The bulk of their implementations are shared;
+//  each label here only does the work of setting the opcode length (not
+//  including any literal bytes), and extracting the literal length, match
+//  length, and match distance (except in pre_d). They then jump into the
+//  shared implementation to actually output the literal and match bytes.
+//
+//  No error checking happens in the first stage, except for ensuring that
+//  the source has enough length to represent the full opcode before
+//  reading past the first byte.
+sml_d:
+  UPDATE_GOOD;
+  // "small distance": This opcode has the structure LLMMMDDD DDDDDDDD LITERAL
+  //  where the length of literal (0-3 bytes) is encoded by the high 2 bits of
+  //  the first byte. We first extract the literal length so we know how long
+  //  the opcode is, then check that the source can hold both this opcode and
+  //  at least one byte of the next (because any valid input stream must be
+  //  terminated with an eos token).
+  opc_len = 2;
+  L = (size_t)extract(opc, 6, 2);
+  M = (size_t)extract(opc, 3, 3) + 3;
+  //  We need to ensure that the source buffer is long enough that we can
+  //  safely read this entire opcode, the literal that follows, and the first
+  //  byte of the next opcode.  Once we satisfy this requirement, we can
+  //  safely unpack the match distance. A check similar to this one is
+  //  present in all the opcode implementations.
+  if (src_len <= opc_len + L)
+    return; // source truncated
+  D = (size_t)extract(opc, 0, 3) << 8 | src_ptr[1];
+  goto copy_literal_and_match;
+
+med_d:
+  UPDATE_GOOD;
+  //  "medium distance": This is a minor variant of the "small distance"
+  //  encoding, where we will now use two extra bytes instead of one to encode
+  //  the restof the match length and distance. This allows an extra two bits
+  //  for the match length, and an extra three bits for the match distance. The
+  //  full structure of the opcode is 101LLMMM DDDDDDMM DDDDDDDD LITERAL.
+  opc_len = 3;
+  L = (size_t)extract(opc, 3, 2);
+  if (src_len <= opc_len + L)
+    return; // source truncated
+  uint16_t opc23 = load2(&src_ptr[1]);
+  M = (size_t)((extract(opc, 0, 3) << 2 | extract(opc23, 0, 2)) + 3);
+  D = (size_t)extract(opc23, 2, 14);
+  goto copy_literal_and_match;
+
+lrg_d:
+  UPDATE_GOOD;
+  //  "large distance": This is another variant of the "small distance"
+  //  encoding, where we will now use two extra bytes to encode the match
+  //  distance, which allows distances up to 65535 to be represented. The full
+  //  structure of the opcode is LLMMM111 DDDDDDDD DDDDDDDD LITERAL.
+  opc_len = 3;
+  L = (size_t)extract(opc, 6, 2);
+  M = (size_t)extract(opc, 3, 3) + 3;
+  if (src_len <= opc_len + L)
+    return; // source truncated
+  D = load2(&src_ptr[1]);
+  goto copy_literal_and_match;
+
+pre_d:
+  UPDATE_GOOD;
+  //  "previous distance": This opcode has the structure LLMMM110, where the
+  //  length of the literal (0-3 bytes) is encoded by the high 2 bits of the
+  //  first byte. We first extract the literal length so we know how long
+  //  the opcode is, then check that the source can hold both this opcode and
+  //  at least one byte of the next (because any valid input stream must be
+  //  terminated with an eos token).
+  opc_len = 1;
+  L = (size_t)extract(opc, 6, 2);
+  M = (size_t)extract(opc, 3, 3) + 3;
+  if (src_len <= opc_len + L)
+    return; // source truncated
+  goto copy_literal_and_match;
+
+copy_literal_and_match:
+  //  Common implementation of writing data for opcodes that have both a
+  //  literal and a match. We begin by advancing the source pointer past
+  //  the opcode, so that it points at the first literal byte (if L
+  //  is non-zero; otherwise it points at the next opcode).
+  PTR_LEN_INC(src_ptr, src_len, opc_len);
+  //  Now we copy the literal from the source pointer to the destination.
+  if (__builtin_expect(dst_len >= 4 && src_len >= 4, 1)) {
+    //  The literal is 0-3 bytes; if we are not near the end of the buffer,
+    //  we can safely just do a 4 byte copy (which is guaranteed to cover
+    //  the complete literal, and may include some other bytes as well).
+    store4(dst_ptr, load4(src_ptr));
+  } else if (L <= dst_len) {
+    //  We are too close to the end of either the input or output stream
+    //  to be able to safely use a four-byte copy, but we will not exhaust
+    //  either stream (we already know that the source will not be
+    //  exhausted from checks in the individual opcode implementations,
+    //  and we just tested that dst_len > L). Thus, we need to do a
+    //  byte-by-byte copy of the literal. This is slow, but it can only ever
+    //  happen near the very end of a buffer, so it is not an important case to
+    //  optimize.
+    for (size_t i = 0; i < L; ++i)
+      dst_ptr[i] = src_ptr[i];
+  } else {
+    // Destination truncated: fill DST, and store partial match
+
+    // Copy partial literal
+    for (size_t i = 0; i < dst_len; ++i)
+      dst_ptr[i] = src_ptr[i];
+    // Save state
+    state->src = src_ptr + dst_len;
+    state->dst = dst_ptr + dst_len;
+    state->L = L - dst_len;
+    state->M = M;
+    state->D = D;
+    return; // destination truncated
+  }
+  //  Having completed the copy of the literal, we advance both the source
+  //  and destination pointers by the number of literal bytes.
+  PTR_LEN_INC(dst_ptr, dst_len, L);
+  PTR_LEN_INC(src_ptr, src_len, L);
+  //  Check if the match distance is valid; matches must not reference
+  //  bytes that preceed the start of the output buffer, nor can the match
+  //  distance be zero.
+  if (D > dst_ptr - state->dst_begin || D == 0)
+    goto invalid_match_distance;
+copy_match:
+  //  Now we copy the match from dst_ptr - D to dst_ptr. It is important to keep
+  //  in mind that we may have D < M, in which case the source and destination
+  //  windows overlap in the copy. The semantics of the match copy are *not*
+  //  those of memmove( ); if the buffers overlap it needs to behave as though
+  //  we were copying byte-by-byte in increasing address order. If, for example,
+  //  D is 1, the copy operation is equivalent to:
+  //
+  //      memset(dst_ptr, dst_ptr[-1], M);
+  //
+  //  i.e. it splats the previous byte. This means that we need to be very
+  //  careful about using wide loads or stores to perform the copy operation.
+  if (__builtin_expect(dst_len >= M + 7 && D >= 8, 1)) {
+    //  We are not near the end of the buffer, and the match distance
+    //  is at least eight. Thus, we can safely loop using eight byte
+    //  copies. The last of these may slop over the intended end of
+    //  the match, but this is OK because we know we have a safety bound
+    //  away from the end of the destination buffer.
+    for (size_t i = 0; i < M; i += 8)
+      store8(&dst_ptr[i], load8(&dst_ptr[i - D]));
+  } else if (M <= dst_len) {
+    //  Either the match distance is too small, or we are too close to
+    //  the end of the buffer to safely use eight byte copies. Fall back
+    //  on a simple byte-by-byte implementation.
+    for (size_t i = 0; i < M; ++i)
+      dst_ptr[i] = dst_ptr[i - D];
+  } else {
+    // Destination truncated: fill DST, and store partial match
+
+    // Copy partial match
+    for (size_t i = 0; i < dst_len; ++i)
+      dst_ptr[i] = dst_ptr[i - D];
+    // Save state
+    state->src = src_ptr;
+    state->dst = dst_ptr + dst_len;
+    state->L = 0;
+    state->M = M - dst_len;
+    state->D = D;
+    return; // destination truncated
+  }
+  //  Update the destination pointer and length to account for the bytes
+  //  written by the match, then load the next opcode byte and branch to
+  //  the appropriate implementation.
+  PTR_LEN_INC(dst_ptr, dst_len, M);
+  opc = src_ptr[0];
+  goto *opc_tbl[opc];
+
+// ===============================================================
+// Opcodes representing only a match (no literal).
+//  These two opcodes (lrg_m and sml_m) encode only a match. The match
+//  distance is carried over from the previous opcode, so all they need
+//  to encode is the match length. We are able to reuse the match copy
+//  sequence from the literal and match opcodes to perform the actual
+//  copy implementation.
+sml_m:
+  UPDATE_GOOD;
+  //  "small match": This opcode has no literal, and uses the previous match
+  //  distance (i.e. it encodes only the match length), in a single byte as
+  //  1111MMMM.
+  opc_len = 1;
+  if (src_len <= opc_len)
+    return; // source truncated
+  M = (size_t)extract(opc, 0, 4);
+  PTR_LEN_INC(src_ptr, src_len, opc_len);
+  goto copy_match;
+
+lrg_m:
+  UPDATE_GOOD;
+  //  "large match": This opcode has no literal, and uses the previous match
+  //  distance (i.e. it encodes only the match length). It is encoded in two
+  //  bytes as 11110000 MMMMMMMM.  Because matches smaller than 16 bytes can
+  //  be represented by sml_m, there is an implicit bias of 16 on the match
+  //  length; the representable values are [16,271].
+  opc_len = 2;
+  if (src_len <= opc_len)
+    return; // source truncated
+  M = src_ptr[1] + 16;
+  PTR_LEN_INC(src_ptr, src_len, opc_len);
+  goto copy_match;
+
+// ===============================================================
+// Opcodes representing only a literal (no match).
+//  These two opcodes (lrg_l and sml_l) encode only a literal.  There is no
+//  match length or match distance to worry about (but we need to *not*
+//  touch D, as it must be preserved between opcodes).
+sml_l:
+  UPDATE_GOOD;
+  //  "small literal": This opcode has no match, and encodes only a literal
+  //  of length up to 15 bytes. The format is 1110LLLL LITERAL.
+  opc_len = 1;
+  L = (size_t)extract(opc, 0, 4);
+  goto copy_literal;
+
+lrg_l:
+  UPDATE_GOOD;
+  //  "large literal": This opcode has no match, and uses the previous match
+  //  distance (i.e. it encodes only the match length). It is encoded in two
+  //  bytes as 11100000 LLLLLLLL LITERAL.  Because literals smaller than 16
+  //  bytes can be represented by sml_l, there is an implicit bias of 16 on
+  //  the literal length; the representable values are [16,271].
+  opc_len = 2;
+  if (src_len <= 2)
+    return; // source truncated
+  L = src_ptr[1] + 16;
+  goto copy_literal;
+
+copy_literal:
+  //  Check that the source buffer is large enough to hold the complete
+  //  literal and at least the first byte of the next opcode. If so, advance
+  //  the source pointer to point to the first byte of the literal and adjust
+  //  the source length accordingly.
+  if (src_len <= opc_len + L)
+    return; // source truncated
+  PTR_LEN_INC(src_ptr, src_len, opc_len);
+  //  Now we copy the literal from the source pointer to the destination.
+  if (dst_len >= L + 7 && src_len >= L + 7) {
+    //  We are not near the end of the source or destination buffers; thus
+    //  we can safely copy the literal using wide copies, without worrying
+    //  about reading or writing past the end of either buffer.
+    for (size_t i = 0; i < L; i += 8)
+      store8(&dst_ptr[i], load8(&src_ptr[i]));
+  } else if (L <= dst_len) {
+    //  We are too close to the end of either the input or output stream
+    //  to be able to safely use an eight-byte copy. Instead we copy the
+    //  literal byte-by-byte.
+    for (size_t i = 0; i < L; ++i)
+      dst_ptr[i] = src_ptr[i];
+  } else {
+    // Destination truncated: fill DST, and store partial match
+
+    // Copy partial literal
+    for (size_t i = 0; i < dst_len; ++i)
+      dst_ptr[i] = src_ptr[i];
+    // Save state
+    state->src = src_ptr + dst_len;
+    state->dst = dst_ptr + dst_len;
+    state->L = L - dst_len;
+    state->M = 0;
+    state->D = D;
+    return; // destination truncated
+  }
+  //  Having completed the copy of the literal, we advance both the source
+  //  and destination pointers by the number of literal bytes.
+  PTR_LEN_INC(dst_ptr, dst_len, L);
+  PTR_LEN_INC(src_ptr, src_len, L);
+  //  Load the first byte of the next opcode, and jump to its implementation.
+  opc = src_ptr[0];
+  goto *opc_tbl[opc];
+
+// ===============================================================
+// Other opcodes
+nop:
+  UPDATE_GOOD;
+  opc_len = 1;
+  if (src_len <= opc_len)
+    return; // source truncated
+  PTR_LEN_INC(src_ptr, src_len, opc_len);
+  opc = src_ptr[0];
+  goto *opc_tbl[opc];
+
+eos:
+  opc_len = 8;
+  if (src_len < opc_len)
+    return; // source truncated (here we don't need an extra byte for next op
+            // code)
+  PTR_LEN_INC(src_ptr, src_len, opc_len);
+  state->end_of_stream = 1;
+  UPDATE_GOOD;
+  return; // end-of-stream
+
+// ===============================================================
+// Return on error
+udef:
+invalid_match_distance:
+
+  return; // we already updated state
 }
-
