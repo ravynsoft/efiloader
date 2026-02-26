@@ -322,9 +322,9 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable, UINTN addr)
     FdtCreateNode(DTB, "/chosen", "memory-map");
 
     struct {
-      UINT32 start;
-      UINT32 end;
-    } fdtmap = { PHYSADDR(addr), PHYSADDR(addr) + DTB_PAGES*EFI_PAGE_SIZE };
+      UINT64 start;
+      UINT64 end;
+    } fdtmap = { VMADDR(addr), VMADDR(addr) + DTB_PAGES*EFI_PAGE_SIZE };
     FdtSetProperty(DTB, "/chosen/memory-map", "DeviceTree", &fdtmap, sizeof(fdtmap));
 
     FdtCreateNode(DTB, "/chosen", "osenvironment");
