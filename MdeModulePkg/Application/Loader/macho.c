@@ -183,14 +183,15 @@ int mapDecompressedSegments(struct mach_header_64 *mh, UINTN *KernelEntry)
                 size += ls->vmsize;
                 CHAR16 segname[16], sectname[16];
                 AsciiStrToUnicodeStrS(ls->segname, segname, sizeof(segname));
+		SetMem((VOID *)(ls->vmaddr & 0xffffffff), 0, ls->vmsize);
 #ifdef DEBUG_LOADER
                 Print(UEFI_STR("  %s at %lx (%d) sz %lx\n"),
                     segname, ls->vmaddr, offset, ls->vmsize);
 #endif
                 if(ls->vmsize == 0)
                     break;
-                else if(!StrCmp(segname, UEFI_STR("__LINKEDIT")))
-                    kernelTop = PHYSADDR(ls->vmaddr) + ls->vmsize;
+                else if(!StrCmp(segname, UEFI_STR("__PRELINK_INFO")))
+		  kernelTop = (PHYSADDR(ls->vmaddr) + ls->vmsize + EFI_PAGE_SIZE-1) & ~(EFI_PAGE_SIZE-1);
 
                 struct section_64 *lsect = 
                     (struct section_64 *)((UINT64)(((UINT64)ls) + sizeof(struct segment_command_64)));
@@ -215,10 +216,8 @@ int mapDecompressedSegments(struct mach_header_64 *mh, UINTN *KernelEntry)
                     EFI_STATUS Status = EFI_SUCCESS;
                     if(lsect->size) {
                         VOID *physaddr = (VOID *)((UINTN)PHYSADDR(lsect->addr));
-                        UINTN align = 1;
-                        align = (1 << align) - 1;
+                        UINTN align = (1 << lsect->align) - 1;
                         UINTN size = (lsect->size + align) & ~align;
-                        Status = gBS->AllocatePages(AllocateAnyPages, EfiLoaderData, EFI_SIZE_TO_PAGES(size), physaddr);
                         CopyMem(physaddr, (VOID *)mh + lsect->offset, size);
                         if(EFI_ERROR(Status))
                             Print(UEFI_STR("!! ERROR %r\n"), Status);

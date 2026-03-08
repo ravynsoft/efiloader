@@ -183,30 +183,32 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
 	    return Status;
 	  }
 	  
-	  if(comptype != 0x6c7a766e /* lzvn */) {
-	    Print(UEFI_STR("!! Error: Unsupported compression scheme\n"));
-	    return EFI_UNSUPPORTED;
-	  }
-	
-	  Status = gBS->AllocatePages(AllocateAnyPages, EfiLoaderData,
-				      uncompsize/EFI_PAGE_SIZE+1, &dstaddr);
-	  if(EFI_ERROR(Status)) {
-	    Print(UEFI_STR("!! Error: failed to allocate memory to decompress! %r\n"),Status);
-	    return Status;
-	  }
+	  if(comptype == 0x6c7a766e /* lzvn */) {
+              Status = gBS->AllocatePages(AllocateAnyPages, EfiLoaderData,
+                                          uncompsize/EFI_PAGE_SIZE+1, &dstaddr);
+              if(EFI_ERROR(Status)) {
+                  Print(UEFI_STR("!! Error: failed to allocate memory to decompress! %r\n"),Status);
+                  return Status;
+              }
 
-	  Print(UEFI_STR("Decompressing IMG4 to %p... "), (VOID *)dstaddr);
-	  lzvn_decoder_state state = {0};
-	  state.src = (VOID *)MachHeader;
-	  state.src_end = (VOID *)MachHeader + compsize;
-	  state.dst = (VOID *)dstaddr;
-	  state.dst_begin = (VOID *)dstaddr;
-	  state.dst_end = (VOID *)dstaddr + uncompsize;
+              Print(UEFI_STR("Decompressing IMG4 to %p... "), (VOID *)dstaddr);
+              lzvn_decoder_state state = {0};
+              state.src = (VOID *)MachHeader;
+              state.src_end = (VOID *)MachHeader + compsize;
+              state.dst = (VOID *)dstaddr;
+              state.dst_begin = (VOID *)dstaddr;
+              state.dst_end = (VOID *)dstaddr + uncompsize;
 
-	  lzvn_decode(&state);
-	  Print(UEFI_STR("%d bytes\n"), uncompsize);
-	  /* Save the uncompressed buffer address for mapping segments */
-	  MachHeader = (struct mach_header_64 *)dstaddr;
+              lzvn_decode(&state);
+              Print(UEFI_STR("%d bytes\n"), uncompsize);
+              /* Save the uncompressed buffer address for mapping segments */
+              MachHeader = (struct mach_header_64 *)dstaddr;
+          } else if(comptype == 0x6e756c6c /* null */) {
+              Print(UEFI_STR("Decompression not needed\n"));
+          } else {
+              Print(UEFI_STR("!! Error: unsupported compression scheme\n"));
+              return EFI_UNSUPPORTED;
+          }
         }
     } /* fat binary */
     
@@ -234,6 +236,7 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
 
     if(isFat) { /* we've already read and decompressed a fat binary */
       *KernelSize = mapDecompressedSegments(MachHeader, KernelEntry);
+      Print(UEFI_STR("KernelSize %lx\n"), KernelSize);
     } else { /* bare kernel image */
       size += MachHeader->sizeofcmds;
       KernelFile->SetPosition(KernelFile, 0);
