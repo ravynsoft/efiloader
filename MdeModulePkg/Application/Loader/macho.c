@@ -99,10 +99,11 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
                 Print(UEFI_STR("  %s at %lx (%d) sz %lx\n"),
                     segname, ls->vmaddr, offset, ls->vmsize);
 #endif
+                if(PHYSADDR(ls->vmaddr) + ls->vmsize > kernelTop)
+                    kernelTop = PHYSADDR(ls->vmaddr) + ls->vmsize;
+                
                 if(ls->vmsize == 0)
                     break;
-                else if(!StrCmp(segname, UEFI_STR("__LINKEDIT")))
-                    kernelTop = PHYSADDR(ls->vmaddr) + ls->vmsize;
 
                 struct section_64 *lsect = 
                     (struct section_64 *)((UINT64)(((UINT64)ls) + sizeof(struct segment_command_64)));
@@ -188,10 +189,11 @@ int mapDecompressedSegments(struct mach_header_64 *mh, UINTN *KernelEntry)
                 Print(UEFI_STR("  %s at %lx (%d) sz %lx\n"),
                     segname, ls->vmaddr, offset, ls->vmsize);
 #endif
+                if(PHYSADDR(ls->vmaddr) + ls->vmsize > kernelTop)
+                    kernelTop = (PHYSADDR(ls->vmaddr) + ls->vmsize + EFI_PAGE_SIZE-1) & ~(EFI_PAGE_SIZE-1);
+
                 if(ls->vmsize == 0)
                     break;
-                else if(!StrCmp(segname, UEFI_STR("__PRELINK_INFO")))
-		  kernelTop = (PHYSADDR(ls->vmaddr) + ls->vmsize + EFI_PAGE_SIZE-1) & ~(EFI_PAGE_SIZE-1);
 
                 struct section_64 *lsect = 
                     (struct section_64 *)((UINT64)(((UINT64)ls) + sizeof(struct segment_command_64)));
@@ -238,5 +240,6 @@ int mapDecompressedSegments(struct mach_header_64 *mh, UINTN *KernelEntry)
     /* Put the kernel header where it belongs */
     CopyMem(mh_exec_hdr, mh, mh->sizeofcmds);
 
+    Print(UEFI_STR("    Base Address 0x%p, Top 0x%p, Size %d bytes\n"), kernelBase, kernelTop, kernelTop - kernelBase);
     return kernelTop - kernelBase;
 }

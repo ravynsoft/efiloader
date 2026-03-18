@@ -129,8 +129,10 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
 		  cputype == CPU_TYPE_X86_64 ? "x86-64" :
 		  cputype == CPU_TYPE_ARM64 ? "arm64" : "unknown", offset, length, align);
 	    
-	    if(cputype == CPU_TYPE_X86_64)
+	    if(cputype == CPU_TYPE_X86_64) {
 		foundX86 = offset;
+                break;
+            }
 	}
 
 	if(foundX86 >= 0) { /* we found the arch we need .. skip to its header */
@@ -169,7 +171,7 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
 	    ? SwapBytes32(pkh->adler32)
 	    : pkh->adler32;
 
-	  Print(UEFI_STR("\nPrelinked kernel v%d, %d bytes %c%c%c%c compressed, CRC %08x\n"),
+	  Print(UEFI_STR("    Prelinked kernel v%d, %d bytes %c%c%c%c compressed, CRC %08x\n"),
 		version, compsize, scheme[3], scheme[2],
 		scheme[1], scheme[0], crc);
 
@@ -191,7 +193,7 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
                   return Status;
               }
 
-              Print(UEFI_STR("Decompressing IMG4 to %p... "), (VOID *)dstaddr);
+              Print(UEFI_STR("    Decompressing IMG4 to %p... "), (VOID *)dstaddr);
               lzvn_decoder_state state = {0};
               state.src = (VOID *)MachHeader;
               state.src_end = (VOID *)MachHeader + compsize;
@@ -203,9 +205,7 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
               Print(UEFI_STR("%d bytes\n"), uncompsize);
               /* Save the uncompressed buffer address for mapping segments */
               MachHeader = (struct mach_header_64 *)dstaddr;
-          } else if(comptype == 0x6e756c6c /* null */) {
-              Print(UEFI_STR("Decompression not needed\n"));
-          } else {
+          } else if(comptype != 0x6e756c6c /* null */) {
               Print(UEFI_STR("!! Error: unsupported compression scheme\n"));
               return EFI_UNSUPPORTED;
           }
@@ -226,17 +226,11 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
         return Status;
     }
 
-    Print(UEFI_STR("\n:: Mach-O %u-bit %s executable. Flags: %04x [%u commands, %u bytes]\n"),
-        MachHeader->magic == MH_MAGIC_64 ? 64 : 32,
-        MachHeader->cputype == CPU_TYPE_X86_64 ? UEFI_STR("x86-64") : UEFI_STR("i386"),
-        MachHeader->flags, MachHeader->ncmds, MachHeader->sizeofcmds);
-
     Status = EFI_SUCCESS;
     *KernelBuffer = (VOID *)KERNEL_LOAD_ADDRESS;
 
     if(isFat) { /* we've already read and decompressed a fat binary */
       *KernelSize = mapDecompressedSegments(MachHeader, KernelEntry);
-      Print(UEFI_STR("KernelSize %lx\n"), KernelSize);
     } else { /* bare kernel image */
       size += MachHeader->sizeofcmds;
       KernelFile->SetPosition(KernelFile, 0);
@@ -463,7 +457,6 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
                 break;
         }
     }
-    Print(UEFI_STR("\n[] Memory: %u MB usable\n"), physPages * EFI_PAGE_SIZE / MB);
 
     LoadDrivers(ImageHandle);
     Status = LoadKernel(&KernelBuffer, &KernelEntry, &KernelSize);
@@ -472,6 +465,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 
     DTB = InitDTB(SystemTable, (UINTN)KernelBuffer + KernelSize);
 
+    Print(UEFI_STR("\n[] Memory: %u MB usable\n"), physPages * EFI_PAGE_SIZE / MB);
     EFI_CONFIGURATION_TABLE *table = SystemTable->ConfigurationTable;
     CHAR8 buffer[128], buffer2[128];
     for(int i = 0; i < SystemTable->NumberOfTableEntries; ++i) {
@@ -558,7 +552,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     BootArgs->MemoryMapDescriptorVersion = DescriptorVersion;
     BootArgs->physMemSize = physPages * EFI_PAGE_SIZE; // convert to bytes
 
-    Print(UEFI_STR("\nStarting kernel at 0x%lx\n"), KernelEntry);
+    Print(UEFI_STR("\nLet's fire up this CHUNKY BOY!\nStarting kernel at 0x%lx\n\n"), KernelEntry);
     gBS->ExitBootServices(ImageHandle, MapKey);
     
     /* jump to kernel _start with bootargs in eax */
