@@ -53,18 +53,6 @@
 #define ACPI_TID_SSDT "SSDT"
 #define ACPI_TID_XSDT "XSDT"
 
-typedef struct {
-    UINT8 signature[8];
-    UINT8 checksum;
-    UINT8 OEMID[6];
-    UINT8 revision;
-    UINT32 RSDT;
-    UINT32 length;
-    UINT64 XSDT;
-    UINT8 checksumEXT;
-    UINT8 reserved[3];
-} ACPI_RSDP;
-
 
 #define SDT_HEADER \
     UINT8 signature[4]; \

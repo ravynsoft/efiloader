@@ -290,7 +290,7 @@ INT32 CompareGUIDs(EFI_GUID guid1, EFI_GUID guid2)
 }
 
 #define SET_BUFFER(x) CopyMem(buffer, x, AsciiStrSize(x))
-FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable, UINTN addr)
+FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable, UINTN addr, VOID *ACPI)
 {
     EFI_STATUS Status;
     UINT8 buffer[256];
@@ -309,10 +309,29 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable, UINTN addr)
     else
         RNG->GetRNG(RNG, NULL, ENTROPY_SIZE, entropy);
 
-    FdtCreateNode(DTB, "/", "cpus");
-    FdtCreateNode(DTB, "/", "memory");
+    FdtSetStringProperty(DTB, "/", "compatible", "ACPI");
 
+    FdtCreateNode(DTB, "/", "cpus");
+    FdtCreateNode(DTB, "/cpus", "cpu@0");
+    FdtSetStringProperty(DTB, "/cpus/cpu@0", "device_type", "processor");
+    val = 0;
+    FdtSetProperty(DTB, "/cpus/cpu@0", "reg", &val, sizeof(val));
+
+    FdtCreateNode(DTB, "/", "memory");
+    
+    FdtCreateNode(DTB, "/", "ACPI"); /* IOACPIPlane */
+    ACPI_RSDP * acpi = (ACPI_RSDP *) ACPI;
+    FdtSetProperty(DTB, "/ACPI", "RSDP", acpi, sizeof(acpi));
+    FdtSetProperty(DTB, "/ACPI", "XSDT", &acpi->XSDT, sizeof(acpi->XSDT));
+    FdtSetProperty(DTB, "/ACPI", "OEMID", acpi->OEMID, sizeof(acpi->OEMID));
+    char uuid[16] = {0};
+    FdtSetProperty(DTB, "/ACPI", "platform-uuid", &uuid, 16);
+    FdtSetStringProperty(DTB, "/ACPI", "device_type", "platform");
+    
     FdtCreateNode(DTB, "/", "options"); /* IODTPlane:/options */
+    FdtSetStringProperty(DTB, "/options", "boot-args", "keepsyms=1");
+    val = 0;
+    FdtSetProperty(DTB, "/options", "csr-active-config", &val, 4);
 
     FdtCreateNode(DTB, "/", "chosen"); /* IODTPlane:/chosen */
     FdtSetProperty(DTB, "/chosen", "random-seed", entropy, ENTROPY_SIZE);
@@ -375,19 +394,6 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable, UINTN addr)
     val64 <<= 32;
     val64 |= low;
     FdtSetProperty(DTB, "/efi/platform", "InitialTSC", &val64, 8);
-
-    // set up the root nub for IOKit
-    FdtSetProperty(DTB, "/efi/platform", "model", UEFI_STR("MacBookPro16,1"), 30);
-    FdtSetProperty(DTB, "/efi/platform", "SystemSerialNumber", UEFI_STR("E1234FFF0001"), 26);
-    FdtSetStringProperty(DTB, "/efi/platform", "compatible", "IOService");
-    FdtSetStringProperty(DTB, "/efi/platform", "IOClass", "AppleI386GenericPlatform");
-    FdtSetStringProperty(DTB, "/efi/platform", "IOProviderClass", "IOPlatformExpertDevice");
-    FdtSetStringProperty(DTB, "/efi/platform", "IOPath", "IODeviceTree:/efi/platform");
-    FdtSetStringProperty(DTB, "/efi/platform", "IOName", "platform");
-    val = 1;
-    FdtSetProperty(DTB, "/efi/platform", "DevicePathsSupported", &val, 4);
-    //FdtSetStringProperty(DTB, "/efi/platform", "IOPlatformUUID",
-    //			 "XXXXXXX what goes here? XXXXXX");
 
     return DTB;
 }
@@ -463,38 +469,45 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     if (EFI_ERROR(Status))
         return Status;
 
-    DTB = InitDTB(SystemTable, (UINTN)KernelBuffer + KernelSize);
-
     Print(UEFI_STR("\n[] Memory: %u MB usable\n"), physPages * EFI_PAGE_SIZE / MB);
+
+    /* Sucks that we do this twice, but I need the ACPI tables to init DTB */
     EFI_CONFIGURATION_TABLE *table = SystemTable->ConfigurationTable;
     CHAR8 buffer[128], buffer2[128];
     for(int i = 0; i < SystemTable->NumberOfTableEntries; ++i) {
         EFI_GUID guid = table[i].VendorGuid;
-        
+        if(CompareGUIDs(guid, gEfiAcpiTableGuid) == 0) {
+            ACPI = table[i].VendorTable;
+            Print(UEFI_STR("[] ACPI RSDP at 0x%p\n"), ACPI);
+            break;
+        }
+    }
+    
+    DTB = InitDTB(SystemTable, (UINTN)KernelBuffer + KernelSize, ACPI);
+
+    for(int i = 0; i < SystemTable->NumberOfTableEntries; ++i) {
+        EFI_GUID guid = table[i].VendorGuid;
+
         AsciiSPrint(buffer, sizeof(buffer), "%g", guid);
         FdtCreateNode(DTB, "/efi/runtime-services/configuration-table", buffer);
         AsciiSPrint(buffer2, sizeof(buffer), "/efi/runtime-services/configuration-table/%g", guid);
-        FdtSetProperty(DTB, buffer2, "name", buffer, AsciiStrSize((char *)buffer));
+
         FdtSetProperty(DTB, buffer2, "table", table[i].VendorTable, sizeof(UINTN));
         FdtSetProperty(DTB, buffer2, "guid", (void *)&guid, sizeof(guid));
-    
+        
         if(CompareGUIDs(guid, gEfiSmbiosTableGuid) == 0 || CompareGUIDs(guid, gEfiSmbios3TableGuid) == 0) {
             SMBIOS = table[i].VendorTable;
             Print(UEFI_STR("[] SMBIOS at 0x%p\n"), SMBIOS);
         }
-        else if(CompareGUIDs(guid, gEfiAcpiTableGuid) == 0) {
-            ACPI = table[i].VendorTable;
-            FdtSetProperty(DTB, buffer2, "alias", "ACPI_20", 8);
-            Print(UEFI_STR("[] ACPI RSDP at 0x%p\n"), ACPI);
-        }
         else if(CompareGUIDs(guid, gEfiDtbTableGuid) == 0) {
             DTB = table[i].VendorTable;
-            Print(UEFI_STR("[] DTB at 0x%p\n"), DTB);
+            Print(UEFI_STR("[] DTB at 0x%p\n"), DTB);         
         }
     }
 
-    if(ACPI != 0)
-        BuildDTBFromACPI(ACPI, DTB);
+    /* if(ACPI != 0) */
+    /*     BuildDTBFromACPI(ACPI, DTB); */
+    
     Print(UEFI_STR("[] Created device tree at 0x%p (%d bytes)\n"), DTB, DTBLength);
 
     /* Pad the DTB up to its maximum size. Boot args follow the DTB. */
