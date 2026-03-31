@@ -312,18 +312,17 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable, UINTN addr, VOID *ACPI)
     FdtSetStringProperty(DTB, "/", "compatible", "ACPI");
 
     FdtCreateNode(DTB, "/", "cpus");
-    FdtCreateNode(DTB, "/cpus", "cpu@0");
-    FdtSetStringProperty(DTB, "/cpus/cpu@0", "device_type", "processor");
-    val = 0;
-    FdtSetProperty(DTB, "/cpus/cpu@0", "reg", &val, sizeof(val));
-
     FdtCreateNode(DTB, "/", "memory");
     
     FdtCreateNode(DTB, "/", "ACPI"); /* IOACPIPlane */
-    ACPI_RSDP * acpi = (ACPI_RSDP *) ACPI;
-    FdtSetProperty(DTB, "/ACPI", "RSDP", acpi, sizeof(acpi));
-    FdtSetProperty(DTB, "/ACPI", "XSDT", &acpi->XSDT, sizeof(acpi->XSDT));
-    FdtSetProperty(DTB, "/ACPI", "OEMID", acpi->OEMID, sizeof(acpi->OEMID));
+    FdtSetStringProperty(DTB, "/ACPI", "compatible", "ACPI");
+    FdtSetStringProperty(DTB, "/ACPI", "status", "okay");
+    val64 = 0;
+    FdtSetProperty(DTB, "/ACPI", "reg", &val64, sizeof(val64));
+    FdtSetProperty(DTB, "/ACPI", "RSDP", &ACPI, sizeof(ACPI));
+    val64 = ((ACPI_RSDP *)ACPI)->XSDT;
+    FdtSetProperty(DTB, "/ACPI", "XSDT", &val64, sizeof(val64));
+
     char uuid[16] = {0};
     FdtSetProperty(DTB, "/ACPI", "platform-uuid", &uuid, 16);
     FdtSetStringProperty(DTB, "/ACPI", "device_type", "platform");
