@@ -243,7 +243,7 @@ INT64 readSLEB128(const UINT8 **p, const UINT8 *end);
 int mapSegments(struct mach_header_64 *mh, UINTN *entry, EFI_FILE_HANDLE KernelFile);
 int mapDecompressedSegments(struct mach_header_64 *mh, UINTN *KernelEntry);
 
-VOID BuildDTBFromACPI(VOID *ACPI, VOID *DTB);
+VOID GetPCIConfigSpace(ACPI_RSDP *rsdp, BOOT_ARGS *boot, void *DTB);
 
 FdtNode *FdtCreateEmpty(UINTN address);
 EFI_STATUS FdtCreateNode(FdtNode *root, CHAR8 *ParentPath, CHAR8 *Name);

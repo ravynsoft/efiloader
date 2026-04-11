@@ -26,7 +26,7 @@
 #include "lzvn_decode.h"
 #include <mach-o/fat.h>
 
-#define VERSION_STR UEFI_STR("v0.7 IN DEVELOPMENT")
+#define VERSION_STR UEFI_STR("v0.8 IN DEVELOPMENT")
 #define KERNEL_LOAD_ADDRESS 0x100000 // 1 MB
 #define DTB_PAGES 4 /* max size of temporary DTB in pages */
 
@@ -503,9 +503,6 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
             Print(UEFI_STR("[] DTB at 0x%p\n"), DTB);         
         }
     }
-
-    /* if(ACPI != 0) */
-    /*     BuildDTBFromACPI(ACPI, DTB); */
     
     Print(UEFI_STR("[] Created device tree at 0x%p (%d bytes)\n"), DTB, DTBLength);
 
@@ -532,7 +529,9 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     VIDEO_INFO videoV1 = {0};
     VIDEO_BOOT video = {0};
     GetVideoInfo(&videoV1, &video);
-
+    
+    GetPCIConfigSpace(ACPI, BootArgs, DTB);
+    
     BootArgs->Version = 2;
     BootArgs->EFIMode = 64;
     BootArgs->Flags = kBootArgsFlagCSRActiveConfig | kBootArgsFlagCSRConfigMode | kBootArgsFlagCSRBoot;

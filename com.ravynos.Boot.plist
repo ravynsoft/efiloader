@@ -1,1 +1,1 @@
--v -s kextlog=0x0fffffff cpus=4 io=0x4E57FFFF iotrace=0x8FFFF dk=0xC11F debug=0x0C -enable_x86_64h
+-v -s kextlog=0x0fffffff commpage_skip_ml_maxcpus=1 cpus=4 io=0x4E57FFFF iotrace=0x8FFFF dk=0xC11F debug=0x0C rd=disk0s1

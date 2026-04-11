@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2025 Zoe Knox <zoe@pixin.net>
+ * Copyright (C) 2025-2026 Zoe Knox <zoe@pixin.net>
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -21,6 +21,7 @@
  */
     
 #include "loader.h"
+#include <stdint.h>
 
 #define ACPI_TID_APIC "APIC"
 #define ACPI_TID_BERT "BERT"
@@ -52,7 +53,6 @@
 #define ACPI_TID_SRAT "SRAT"
 #define ACPI_TID_SSDT "SSDT"
 #define ACPI_TID_XSDT "XSDT"
-
 
 #define SDT_HEADER \
     UINT8 signature[4]; \
@@ -134,38 +134,38 @@ typedef struct {
     UINT32 Flags;
 } ACPI_APIC;
 
-UINTN parseFADT(ACPI_FADT *fadt, VOID *DTB)
+typedef struct {
+    SDT_HEADER
+    UINT64 baseAddress;
+    UINT16 segmentGroup;
+    UINT8 startBus;
+    UINT8 endBus;
+    UINT32 reserved;
+} ACPI_MCFG;
+
+VOID GetPCIConfigSpace(ACPI_RSDP *rsdp, BOOT_ARGS *boot, void *DTB)
 {
-    return 0;
-}
+    ACPI_SDT_HEADER *xsdt = (ACPI_SDT_HEADER *)(rsdp->XSDT);
+    if (CompareMem(xsdt->signature, "XSDT", 4)) {
+        Print(UEFI_STR("No XSDT!\n"));
+        return;
+    }
 
-UINTN parseAPIC(ACPI_APIC *apic, VOID *DTB)
-{
-    return 0;
-}
+    ACPI_SDT_HEADER **tableP
+        = (ACPI_SDT_HEADER **) (rsdp->XSDT + sizeof(ACPI_SDT_HEADER));
+    ACPI_SDT_HEADER **end = (ACPI_SDT_HEADER **) (rsdp->XSDT + xsdt->length);
 
-VOID BuildDTBFromACPI(VOID *ACPI, VOID *DTB)
-{
-    ACPI_RSDP *rsdp = ACPI;
-    ACPI_SDT_HEADER *sdt = (ACPI_SDT_HEADER *)(rsdp->XSDT ? rsdp->XSDT : rsdp->RSDT);
-
-    Print(UEFI_STR("    %c%c%c%c %d bytes at 0x%lx\n"), sdt->signature[0], 
-        sdt->signature[1], sdt->signature[2], sdt->signature[3], sdt->length, sdt);
-
-    const int entsize = (sdt->signature[0] == 'X') ? 8 : 4;
-    int count = (sdt->length - sizeof(ACPI_SDT_HEADER)) / entsize;
-    UINT32 *entry = (UINT32 *)(((UINTN)sdt) + sizeof(ACPI_SDT_HEADER));
-    for(int i = 0; i < count; ++i) {
-        Print(UEFI_STR("     +-- %lx ["), entry);
-        ACPI_SDT_HEADER *h = (ACPI_SDT_HEADER *)((long)(*entry));
-        Print(UEFI_STR("%c%c%c%c, %d bytes]\n"), h->signature[0],
-            h->signature[1], h->signature[2], h->signature[3], h->length);
-        if(!CompareMem(h->signature, ACPI_TID_FACP, 4))
-            parseFADT((ACPI_FADT *)h, DTB);
-        else if(!CompareMem(h->signature, ACPI_TID_APIC, 4))
-            parseAPIC((ACPI_APIC *)h, DTB);
-        entry++; // +4 bytes
-        if(entsize == 8)
-            entry++;
+    while (tableP < end) {
+        ACPI_SDT_HEADER *table = *tableP;
+        if(table->length == 0) break;
+        if (!CompareMem(table->signature, "MCFG", 4)) {
+            ACPI_MCFG *entry = (ACPI_MCFG *) table;
+            boot->pciConfigSpaceBaseAddr = entry->baseAddress;
+            boot->pciConfigSpaceStartBusNumber = entry->startBus;
+            boot->pciConfigSpaceEndBusNumber = entry->endBus;
+	    return;
+	}
+        tableP++;
     }
 }
+
