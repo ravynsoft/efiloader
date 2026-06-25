@@ -24,15 +24,10 @@
 #define __LOADER_H
 
 /* host headers */
-#if defined(__linux__)
-# if defined(__x86_64__) || defined(__arm64__)
-#  define __LITTLE_ENDIAN__ 1
-# else
-#  error Unknown endianness
-# endif
-# if defined(__GCC__)
-#  error GCC is defined
-# endif
+#if defined(__x86_64__) || defined(__arm64__) || defined(__aarch64__)
+# define __LITTLE_ENDIAN__ 1
+#elif defined(__linux__)
+# error Unknown endianness on Linux
 #else
 # include <i386/endian.h>
 #endif

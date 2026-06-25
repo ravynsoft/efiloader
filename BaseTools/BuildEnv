@@ -240,6 +240,8 @@ ScriptMain() {
 
   RestorePreviousConfiguration
 
+  mkdir -p "$CONF_PATH"
+
   SetEdkToolsPath
   if [ -z $EDK_TOOLS_PATH ]
   then

@@ -40,3 +40,7 @@
   gEfiMdeModulePkgTokenSpaceGuid.PcdHelloWorldPrintString   ## SOMETIMES_CONSUMES
   gEfiMdeModulePkgTokenSpaceGuid.PcdHelloWorldPrintTimes    ## SOMETIMES_CONSUMES
 
+[BuildOptions]
+  # Suppress nullability warnings from macOS SDK system headers (not our code)
+  *_*_*_CC_FLAGS = -Wno-nullability-completeness
+
