@@ -84,7 +84,6 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
 {
     UINT32 kernelTop = 0, kernelBase = 0;
     struct mach_header_64 *mh_exec_hdr = 0;
-    int size = 0;
 
     uint32_t offset = sizeof(struct mach_header_64);
     for(int i = 0; i < mh->ncmds; ++i) {
@@ -92,7 +91,6 @@ int mapSegments(struct mach_header_64 *mh, UINTN *KernelEntry, EFI_FILE_HANDLE K
         switch(lc->cmd) {
             case LC_SEGMENT_64: {
                 const struct segment_command_64 *ls = (const struct segment_command_64 *)lc;
-                size += ls->vmsize;
                 CHAR16 segname[16], sectname[16];
                 AsciiStrToUnicodeStrS(ls->segname, segname, sizeof(segname));
 #ifdef DEBUG_LOADER
@@ -173,7 +171,6 @@ int mapDecompressedSegments(struct mach_header_64 *mh, UINTN *KernelEntry)
 {
     UINT32 kernelTop = 0, kernelBase = 0;
     struct mach_header_64 *mh_exec_hdr = 0;
-    int size = 0;
 
     uint32_t offset = sizeof(struct mach_header_64);
     for(int i = 0; i < mh->ncmds; ++i) {
@@ -181,7 +178,6 @@ int mapDecompressedSegments(struct mach_header_64 *mh, UINTN *KernelEntry)
         switch(lc->cmd) {
             case LC_SEGMENT_64: {
                 const struct segment_command_64 *ls = (const struct segment_command_64 *)lc;
-                size += ls->vmsize;
                 CHAR16 segname[16], sectname[16];
                 AsciiStrToUnicodeStrS(ls->segname, segname, sizeof(segname));
 		SetMem((VOID *)(ls->vmaddr & 0xffffffff), 0, ls->vmsize);
