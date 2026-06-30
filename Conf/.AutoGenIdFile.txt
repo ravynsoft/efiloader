@@ -1,3 +1,0 @@
-Arch=X64
-BuildDir=/Users/vihaannathan/Desktop/efiloader/Build/EmulatorX64/DEBUG_XCODE5
-PlatformGuid=05FD064D-1073-E844-936C-A0E16317107D
