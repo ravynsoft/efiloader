@@ -1,7 +1,7 @@
 /*
  * Boot configuration for the ravynOS XNU EFI loader
  *
- * Copyright (C) 2025-2026 Zoe Knox <zoe@pixin.net>
+ * Copyright (C) 2025-2026 Vihaan Nathan
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal

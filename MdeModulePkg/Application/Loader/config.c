@@ -1,7 +1,7 @@
 /*
  * Boot configuration parser for the ravynOS XNU EFI loader
  *
- * Copyright (C) 2025-2026 Zoe Knox <zoe@pixin.net>
+ * Copyright (C) 2025-2026 Vihaan Nathan
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -64,60 +64,6 @@ STATIC VOID CopyValue(CHAR8 *dst, UINTN dstSize, CONST CHAR8 *src, UINTN srcLen)
     dst[srcLen] = '\0';
 }
 
-/* Single hex digit -> value, or -1 if not a hex digit. */
-STATIC INTN HexDigit(CHAR8 c)
-{
-    if(c >= '0' && c <= '9') return c - '0';
-    if(c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if(c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
-/* Parse "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" into 16 bytes. Hyphens optional. */
-STATIC BOOLEAN ParseUUID(CONST CHAR8 *s, UINTN len, UINT8 out[16])
-{
-    UINTN n = 0;
-    INTN hi = -1;
-
-    for(UINTN i = 0; i < len && n < 16; i++) {
-        if(s[i] == '-')
-            continue;
-        INTN v = HexDigit(s[i]);
-        if(v < 0)
-            return FALSE;
-        if(hi < 0) {
-            hi = v;
-        } else {
-            out[n++] = (UINT8)((hi << 4) | v);
-            hi = -1;
-        }
-    }
-    return n == 16 && hi < 0;
-}
-
-/* Parse a decimal or 0x-prefixed hexadecimal <integer> body. */
-STATIC UINT32 ParseInteger(CONST CHAR8 *s, UINTN len)
-{
-    UINT32 value = 0;
-    UINTN i = 0;
-
-    if(len >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
-        for(i = 2; i < len; i++) {
-            INTN v = HexDigit(s[i]);
-            if(v < 0)
-                break;
-            value = (value << 4) | (UINT32)v;
-        }
-    } else {
-        for(i = 0; i < len; i++) {
-            if(s[i] < '0' || s[i] > '9')
-                break;
-            value = value * 10 + (UINT32)(s[i] - '0');
-        }
-    }
-    return value;
-}
-
 /*
  * Store one key/value pair.  'isString' distinguishes <string> from <integer>;
  * keys whose value is the wrong type, or that we don't recognize, are ignored.
@@ -130,9 +76,23 @@ STATIC VOID StoreConfigValue(CONST CHAR8 *key, UINTN keyLen,
     } else if(isString && KeyMatch(key, keyLen, "kernel")) {
         CopyValue(gBootConfig.KernelPath, sizeof(gBootConfig.KernelPath), val, valLen);
     } else if(isString && KeyMatch(key, keyLen, "boot-uuid")) {
-        gBootConfig.HasBootUUID = ParseUUID(val, valLen, gBootConfig.BootUUID);
+        CHAR8 buf[40];
+        UINTN n = valLen < sizeof(buf) - 1 ? valLen : sizeof(buf) - 1;
+        CopyMem(buf, val, n);
+        buf[n] = '\0';
+        EFI_GUID g;
+        gBootConfig.HasBootUUID = !RETURN_ERROR(AsciiStrToGuid(buf, &g));
+        if(gBootConfig.HasBootUUID)
+            CopyMem(gBootConfig.BootUUID, &g, sizeof(gBootConfig.BootUUID));
     } else if(!isString && KeyMatch(key, keyLen, "csr-active-config")) {
-        gBootConfig.CsrActiveConfig = ParseInteger(val, valLen);
+        CHAR8 buf[32];
+        UINTN n = valLen < sizeof(buf) - 1 ? valLen : sizeof(buf) - 1;
+        CopyMem(buf, val, n);
+        buf[n] = '\0';
+        if(n >= 2 && buf[0] == '0' && (buf[1] == 'x' || buf[1] == 'X'))
+            gBootConfig.CsrActiveConfig = (UINT32)AsciiStrHexToUintn(buf);
+        else
+            gBootConfig.CsrActiveConfig = (UINT32)AsciiStrDecimalToUintn(buf);
     }
 }
 
