@@ -325,7 +325,7 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable, UINTN addr, VOID *ACPI)
     val64 = ((ACPI_RSDP *)ACPI)->XSDT;
     FdtSetProperty(DTB, "/ACPI", "XSDT", &val64, sizeof(val64));
 
-    FdtSetProperty(DTB, "/ACPI", "platform-uuid", gBootConfig.BootUUID, sizeof(gBootConfig.BootUUID));
+    FdtSetProperty(DTB, "/ACPI", "platform-uuid", gBootConfig.PlatformUUID, AsciiStrSize(gBootConfig.PlatformUUID));
     FdtSetStringProperty(DTB, "/ACPI", "device_type", "platform");
     
     FdtCreateNode(DTB, "/", "options"); /* IODTPlane:/options */
@@ -343,12 +343,13 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable, UINTN addr, VOID *ACPI)
     } fdtmap = { VMADDR(addr), VMADDR(addr) + DTB_PAGES*EFI_PAGE_SIZE };
     FdtSetProperty(DTB, "/chosen/memory-map", "DeviceTree", &fdtmap, sizeof(fdtmap));
 
-    FdtCreateNode(DTB, "/chosen", "osenvironment");
-    FdtCreateNode(DTB, "/chosen", "ephemeral-storage");
-    FdtCreateNode(DTB, "/chosen", "use-recovery-securityd");
+    //FdtCreateNode(DTB, "/chosen", "osenvironment");
+    //FdtCreateNode(DTB, "/chosen", "ephemeral-storage");
+    //FdtCreateNode(DTB, "/chosen", "use-recovery-securityd");
     FdtSetProperty(DTB, "/chosen", "booter-name", "loader.efi", 11);
     FdtSetProperty(DTB, "/chosen", "boot-file", gBootConfig.KernelPath, AsciiStrSize(gBootConfig.KernelPath));
- 
+    FdtSetProperty(DTB, "/chosen", "boot-uuid", gBootConfig.BootUUID, AsciiStrSize(gBootConfig.BootUUID));
+
     val = 1024;
     FdtCreateNode(DTB, "/", "defaults");
     FdtSetProperty(DTB, "/defaults", "kern.max_task_pmem", &val, 4);

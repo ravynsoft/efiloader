@@ -34,10 +34,10 @@
  * gBootConfig, and a key match in StoreConfigValue() (config.c).
  */
 typedef struct {
-    CHAR8   BootArgs[1024];     // "boot-args"          -> BOOT_ARGS.CommandLine
-    CHAR8   KernelPath[256];    // "kernel"             -> path the booter opens
-    UINT8   BootUUID[16];       // "boot-uuid"          -> /ACPI platform-uuid
-    BOOLEAN HasBootUUID;        // TRUE if a valid boot-uuid was parsed
+    CHAR8   BootArgs[1024];     // "boot-args" -> BOOT_ARGS.CommandLine
+    CHAR8   KernelPath[256];    // "boot-file" -> path the booter opens
+    CHAR8   PlatformUUID[40];   // "platform-uuid" -> UUID of the machine
+    CHAR8   BootUUID[40];       // "boot-uuid" -> boot file system UUID
     UINT32  CsrActiveConfig;    // "csr-active-config"  -> BOOT_ARGS.csrActiveConfig
 } BOOT_CONFIG;
 

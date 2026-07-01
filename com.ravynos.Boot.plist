@@ -2,9 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>boot-args</key>
-	<string>-v -s kextlog=0x0fffffff commpage_skip_ml_maxcpus=1 cpus=4 io=0x4E57FFFF iotrace=0x8FFFF dk=0xC11F debug=0x0C rd=disk0s1</string>
-	<key>kernel</key>
-	<string>\ravynOS\kernelcache</string>
+  <key>boot-args</key>
+  <string>-v -s debug=0x0C</string>
+  <key>boot-file</key>
+  <string>\ravynOS\kernelcache</string>
+  <key>boot-uuid</key>
+  <string>80C8BAFE-EB52-3601-A164-31E456F2E740</string>
 </dict>
 </plist>

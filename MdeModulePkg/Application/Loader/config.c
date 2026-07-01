@@ -34,8 +34,8 @@
 BOOT_CONFIG gBootConfig = {
     .BootArgs        = "",
     .KernelPath      = "\\ravynOS\\kernelcache",
-    .BootUUID        = {0},
-    .HasBootUUID     = FALSE,
+    .PlatformUUID    = "",
+    .BootUUID        = "",
     .CsrActiveConfig = CSR_ALLOW_UNTRUSTED_KEXTS | CSR_ALLOW_UNRESTRICTED_FS |
                        CSR_ALLOW_KERNEL_DEBUGGER | CSR_ALLOW_APPLE_INTERNAL |
                        CSR_ALLOW_UNRESTRICTED_DTRACE | CSR_ALLOW_UNRESTRICTED_NVRAM |
@@ -73,17 +73,12 @@ STATIC VOID StoreConfigValue(CONST CHAR8 *key, UINTN keyLen,
 {
     if(isString && KeyMatch(key, keyLen, "boot-args")) {
         CopyValue(gBootConfig.BootArgs, sizeof(gBootConfig.BootArgs), val, valLen);
-    } else if(isString && KeyMatch(key, keyLen, "kernel")) {
+    } else if(isString && KeyMatch(key, keyLen, "boot-file")) {
         CopyValue(gBootConfig.KernelPath, sizeof(gBootConfig.KernelPath), val, valLen);
     } else if(isString && KeyMatch(key, keyLen, "boot-uuid")) {
-        CHAR8 buf[40];
-        UINTN n = valLen < sizeof(buf) - 1 ? valLen : sizeof(buf) - 1;
-        CopyMem(buf, val, n);
-        buf[n] = '\0';
-        EFI_GUID g;
-        gBootConfig.HasBootUUID = !RETURN_ERROR(AsciiStrToGuid(buf, &g));
-        if(gBootConfig.HasBootUUID)
-            CopyMem(gBootConfig.BootUUID, &g, sizeof(gBootConfig.BootUUID));
+        CopyValue(gBootConfig.BootUUID, sizeof(gBootConfig.BootUUID), val, valLen);
+    } else if(isString && KeyMatch(key, keyLen, "platform-uuid")) {
+        CopyValue(gBootConfig.PlatformUUID, sizeof(gBootConfig.PlatformUUID), val, valLen);
     } else if(!isString && KeyMatch(key, keyLen, "csr-active-config")) {
         CHAR8 buf[32];
         UINTN n = valLen < sizeof(buf) - 1 ? valLen : sizeof(buf) - 1;
