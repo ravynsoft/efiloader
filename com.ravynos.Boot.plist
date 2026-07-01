@@ -1,1 +1,10 @@
--v -s kextlog=0x0fffffff commpage_skip_ml_maxcpus=1 cpus=4 io=0x4E57FFFF iotrace=0x8FFFF dk=0xC11F debug=0x0C rd=disk0s1
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>boot-args</key>
+	<string>-v -s kextlog=0x0fffffff commpage_skip_ml_maxcpus=1 cpus=4 io=0x4E57FFFF iotrace=0x8FFFF dk=0xC11F debug=0x0C rd=disk0s1</string>
+	<key>kernel</key>
+	<string>\ravynOS\kernelcache</string>
+</dict>
+</plist>

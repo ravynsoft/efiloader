@@ -23,6 +23,7 @@
  */
 
 #include "loader.h"
+#include "config.h"
 #include "lzvn_decode.h"
 #include <mach-o/fat.h>
 
@@ -37,7 +38,6 @@ EFI_GUID gEfiSmbios3TableGuid = SMBIOS3_TABLE_GUID;
 EFI_GUID gEfiSmbiosTableGuid = SMBIOS_TABLE_GUID;
 EFI_GUID gEfiRngProtocolGuid = EFI_RNG_PROTOCOL_GUID;
 
-CHAR8 cmdLine[1024];
 extern UINT32 DTBLength;
 
 EFI_STATUS GetVideoInfo(VIDEO_INFO *v1, VIDEO_BOOT *v)
@@ -88,7 +88,9 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
     if (EFI_ERROR(Status))
         return Status;
 
-    Status = Root->Open(Root, &KernelFile, UEFI_STR("\\ravynOS\\kernelcache"), EFI_FILE_MODE_READ, 0);
+    CHAR16 KernelPath[256];
+    AsciiStrToUnicodeStrS(gBootConfig.KernelPath, KernelPath, ARRAY_SIZE(KernelPath));
+    Status = Root->Open(Root, &KernelFile, KernelPath, EFI_FILE_MODE_READ, 0);
     if (EFI_ERROR(Status)) {
         Root->Close(Root);
         return Status;
@@ -323,8 +325,7 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable, UINTN addr, VOID *ACPI)
     val64 = ((ACPI_RSDP *)ACPI)->XSDT;
     FdtSetProperty(DTB, "/ACPI", "XSDT", &val64, sizeof(val64));
 
-    char uuid[16] = {0};
-    FdtSetProperty(DTB, "/ACPI", "platform-uuid", &uuid, 16);
+    FdtSetProperty(DTB, "/ACPI", "platform-uuid", gBootConfig.BootUUID, sizeof(gBootConfig.BootUUID));
     FdtSetStringProperty(DTB, "/ACPI", "device_type", "platform");
     
     FdtCreateNode(DTB, "/", "options"); /* IODTPlane:/options */
@@ -346,7 +347,7 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable, UINTN addr, VOID *ACPI)
     FdtCreateNode(DTB, "/chosen", "ephemeral-storage");
     FdtCreateNode(DTB, "/chosen", "use-recovery-securityd");
     FdtSetProperty(DTB, "/chosen", "booter-name", "loader.efi", 11);
-    FdtSetProperty(DTB, "/chosen", "boot-file", "\\ravynOS\\kernelcache", 21);
+    FdtSetProperty(DTB, "/chosen", "boot-file", gBootConfig.KernelPath, AsciiStrSize(gBootConfig.KernelPath));
  
     val = 1024;
     FdtCreateNode(DTB, "/", "defaults");
@@ -397,32 +398,6 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable, UINTN addr, VOID *ACPI)
     return DTB;
 }
 
-VOID LoadConfigFile(VOID)
-{
-    CHAR8 rawConfig[EFI_PAGE_SIZE];
-    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs;
-    EFI_FILE_HANDLE Root, cfgFile;
-
-    if(EFI_ERROR(gBS->LocateProtocol(&gEfiSimpleFileSystemProtocolGuid, NULL, (VOID**)&Fs)))
-        return;
-
-    if(EFI_ERROR(Fs->OpenVolume(Fs, &Root)))
-        return;
-
-    if(EFI_ERROR(Root->Open(Root, &cfgFile, UEFI_STR("\\ravynOS\\com.ravynos.boot.plist"), EFI_FILE_MODE_READ, 0))) {
-        Root->Close(Root);
-        return;
-    }
-
-    UINT64 size = EFI_PAGE_SIZE;
-    cfgFile->Read(cfgFile, &size, &rawConfig);
-    cfgFile->Close(cfgFile);
-    Root->Close(Root);
-
-    CopyMem(cmdLine, rawConfig, size > 1024 ? 1024 : size);
-    return;
-}
-
 EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
 {
     EFI_STATUS Status;
@@ -439,7 +414,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 
     gST->ConOut->ClearScreen(gST->ConOut);
     Print(UEFI_STR(":: ravynOS EFI Loader %s\n"), VERSION_STR);
-    LoadConfigFile();
+    LoadBootConfig();
 
     Status = gBS->GetMemoryMap(&MemoryMapSize, MemoryMap, &MapKey, &DescriptorSize, &DescriptorVersion);
     if (Status == EFI_BUFFER_TOO_SMALL) {
@@ -535,7 +510,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     BootArgs->Version = 2;
     BootArgs->EFIMode = 64;
     BootArgs->Flags = kBootArgsFlagCSRActiveConfig | kBootArgsFlagCSRConfigMode | kBootArgsFlagCSRBoot;
-    AsciiStrCpyS(BootArgs->CommandLine, 1024, cmdLine); 
+    AsciiStrCpyS(BootArgs->CommandLine, 1024, gBootConfig.BootArgs);
     BootArgs->VideoV1 = videoV1;
     BootArgs->DeviceTree = VMADDR(DTB);
     BootArgs->DeviceTreeLength = DTBLength;
@@ -550,11 +525,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     BootArgs->keystoreDataStart = 0; // phys addr of keystore data for iokit
     BootArgs->keystoreDataSize = 0;
     BootArgs->Video = video;
-    BootArgs->csrActiveConfig = CSR_ALLOW_UNTRUSTED_KEXTS | CSR_ALLOW_UNRESTRICTED_FS |
-                                CSR_ALLOW_KERNEL_DEBUGGER | CSR_ALLOW_APPLE_INTERNAL |
-                                CSR_ALLOW_UNRESTRICTED_DTRACE | CSR_ALLOW_UNRESTRICTED_NVRAM |
-                                CSR_ALLOW_DEVICE_CONFIGURATION | CSR_ALLOW_ANY_RECOVERY_OS |
-                                CSR_ALLOW_UNAPPROVED_KEXTS;
+    BootArgs->csrActiveConfig = gBootConfig.CsrActiveConfig;
     BootArgs->csrCapabilities = CSR_CAPABILITY_UNLIMITED | CSR_CAPABILITY_CONFIG |
                                 CSR_CAPABILITY_APPLE_INTERNAL;
     BootArgs->MemoryMap = PHYSADDR(MemoryMap);
