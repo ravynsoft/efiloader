@@ -116,7 +116,7 @@ EFI_STATUS LoadKernel(VOID **KernelBuffer, UINTN *KernelEntry, UINTN *KernelSize
 
     if(isFat) {
 	int foundX86 = -1;
-        Print(UEFI_STR("\n:: Mach-O fat binary [%d slices].\n"), nSlice);
+        Print(UEFI_STR("\n:: Mach-O fat binary [%d slice%a].\n"), nSlice, nSlice == 1 ? "" : "s");
 	for(int i = 0; i < nSlice; ++i) {
             struct fat_arch *arch = (struct fat_arch *)((CHAR8 *)MachHeader +
 		       sizeof(struct fat_header) + i*sizeof(struct fat_arch));
