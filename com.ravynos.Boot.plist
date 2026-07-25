@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>boot-args</key>
-  <string>-v -s debug=0x0C serial=0 iotrace=0 io=0</string>
+  <string>-v -s debug=0x0C serial=0 iotrace=0 io=0x1000</string>
   <key>boot-file</key>
   <string>\ravynOS\kernelcache</string>
   <key>boot-uuid</key>

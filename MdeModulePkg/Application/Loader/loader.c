@@ -55,18 +55,21 @@ EFI_STATUS GetVideoInfo(VIDEO_INFO *v1, VIDEO_BOOT *v)
         info->HorizontalResolution, info->VerticalResolution,
         mode->FrameBufferSize / MB, mode->FrameBufferBase);
 
+    /* We want to enter the kernel in text mode. When the graphics console
+     * inits, it wants to switch rather than start in graphics mode
+     */
     v1->baseAddr = mode->FrameBufferBase;
-    v1->display = GRAPHICS_MODE;
+    v1->display = FB_TEXT_MODE;
     v1->bytesPerRow = info->PixelsPerScanLine * 4; // UEFI only has RGBA, BGRA, or mono
     v1->width = info->HorizontalResolution;
     v1->height = info->VerticalResolution;
-    v1->depth = 4;
+    v1->depth = 32;
 
-    v->display = GRAPHICS_MODE;
+    v->display = FB_TEXT_MODE;
     v->bytesPerRow = info->PixelsPerScanLine * 4;
     v->width = info->HorizontalResolution;
     v->height = info->VerticalResolution;
-    v->depth = 4;
+    v->depth = 32;
     v->rotate = 0;
     v->baseAddr = mode->FrameBufferBase;
 
@@ -512,8 +515,8 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     BootArgs->Flags = kBootArgsFlagCSRActiveConfig
                     | kBootArgsFlagCSRConfigMode 
                     | kBootArgsFlagCSRBoot
-                    | kBootArgsFlagBlackBg
-                    | kBootArgsFlagLoginUI;
+                    | kBootArgsFlagBlack        // no progress meter
+                    | kBootArgsFlagBlackBg;
     AsciiStrCpyS(BootArgs->CommandLine, 1024, gBootConfig.BootArgs);
     BootArgs->VideoV1 = videoV1;
     BootArgs->DeviceTree = VMADDR(DTB);
