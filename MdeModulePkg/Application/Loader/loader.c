@@ -312,12 +312,9 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable, UINTN addr, VOID *ACPI)
         RNG->GetRNG(RNG, NULL, ENTROPY_SIZE, entropy);
 
     FdtSetStringProperty(DTB, "/", "compatible", "ACPI");
+    FdtCreateNode(DTB, "/", "ACPI");
 
-    FdtCreateNode(DTB, "/", "cpus");
-    FdtCreateNode(DTB, "/", "memory");
-    
-    FdtCreateNode(DTB, "/", "ACPI"); /* IOACPIPlane */
-    FdtSetStringProperty(DTB, "/ACPI", "compatible", "ACPI");
+    FdtSetStringProperty(DTB, "/ACPI", "IOClass", "IOPlatformExpertDevice");
     FdtSetStringProperty(DTB, "/ACPI", "status", "okay");
     val64 = 0;
     FdtSetProperty(DTB, "/ACPI", "reg", &val64, sizeof(val64));
@@ -327,7 +324,9 @@ FdtNode *InitDTB(EFI_SYSTEM_TABLE *SystemTable, UINTN addr, VOID *ACPI)
 
     FdtSetProperty(DTB, "/ACPI", "platform-uuid", gBootConfig.PlatformUUID, AsciiStrSize(gBootConfig.PlatformUUID));
     FdtSetStringProperty(DTB, "/ACPI", "device_type", "platform");
-    
+
+    FdtCreateNode(DTB, "/", "cpus");
+    FdtCreateNode(DTB, "/", "memory");
     FdtCreateNode(DTB, "/", "options"); /* IODTPlane:/options */
     FdtSetStringProperty(DTB, "/options", "boot-args", "keepsyms=1");
     val = 0;
@@ -510,7 +509,11 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     
     BootArgs->Version = 2;
     BootArgs->EFIMode = 64;
-    BootArgs->Flags = kBootArgsFlagCSRActiveConfig | kBootArgsFlagCSRConfigMode | kBootArgsFlagCSRBoot;
+    BootArgs->Flags = kBootArgsFlagCSRActiveConfig
+                    | kBootArgsFlagCSRConfigMode 
+                    | kBootArgsFlagCSRBoot
+                    | kBootArgsFlagBlackBg
+                    | kBootArgsFlagLoginUI;
     AsciiStrCpyS(BootArgs->CommandLine, 1024, gBootConfig.BootArgs);
     BootArgs->VideoV1 = videoV1;
     BootArgs->DeviceTree = VMADDR(DTB);
@@ -535,7 +538,8 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
     BootArgs->MemoryMapDescriptorVersion = DescriptorVersion;
     BootArgs->physMemSize = physPages * EFI_PAGE_SIZE; // convert to bytes
 
-    Print(UEFI_STR("\nLet's fire up this CHUNKY BOY!\nStarting kernel at 0x%lx\n\n"), KernelEntry);
+    Print(UEFI_STR("\nStarting kernel at 0x%lx\n\n"), KernelEntry);
+    gST->ConOut->ClearScreen(gST->ConOut);
     gBS->ExitBootServices(ImageHandle, MapKey);
     
     /* jump to kernel _start with bootargs in eax */
